@@ -4,7 +4,7 @@ The MCP server (Streamable HTTP) that agents connect to. It holds every real cre
 
 | Module | Owner | Purpose |
 |---|---|---|
-| `mulligan/mcp/` | A | MCP server, typed tool registry (no raw SQL writes), upstream MCP pass-through, per-agent bearer auth |
+| `mulligan/mcp_server/` (not `mcp/`: that would shadow the `mcp` SDK) | A | MCP server, typed tool registry (no raw SQL writes), upstream MCP pass-through, per-agent bearer auth |
 | `mulligan/api/` | A | REST `/api/*` and SSE `/api/events` |
 | `mulligan/log/` | A | Action log in TimescaleDB |
 | `mulligan/orchestrator/` | A | Rewind plan (newest action first), verification against the expected state |

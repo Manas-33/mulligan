@@ -16,7 +16,7 @@ mulligan/
 ├── gateway/              # Python 3.12, FastAPI + official `mcp` SDK (Streamable HTTP)
 │   ├── mulligan/
 │   │   ├── api/          #   A: REST /api/* + SSE /api/events
-│   │   ├── mcp/          #   A: MCP server, typed tool registry, upstream pass-through
+│   │   ├── mcp_server/   #   A: MCP server, typed tool registry, upstream pass-through
 │   │   ├── log/          #   A: action log (TimescaleDB)
 │   │   ├── orchestrator/ #   A: rewind planning (newest action first), verification
 │   │   ├── adapters/     #   A: postgres/ github/ notion/  (real undo, conflict detection)

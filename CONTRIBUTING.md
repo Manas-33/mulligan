@@ -7,7 +7,7 @@ Two people, each running a separate Claude Code session. The full process is in 
 | Path | Owner |
 |---|---|
 | `contracts/` | **Shared.** Change only through a PR that both people approve. |
-| `gateway/mulligan/{api,mcp,log,orchestrator,adapters}/`, `gateway/migrations/`, `gateway/mulligan/app.py`, `gateway/pyproject.toml` | Stream A |
+| `gateway/mulligan/{api,mcp_server,log,orchestrator,adapters}/`, `gateway/migrations/`, `gateway/mulligan/app.py`, `gateway/pyproject.toml` | Stream A |
 | `gateway/mulligan/holds/`, `gateway/mulligan/classify/` | Stream B |
 | `approvals-photon/`, `dashboard/`, `classifier/` | Stream B |
 | `fetch-agent/`, `demo/`, `infra/`, `docker-compose.yml`, `Makefile`, `.github/workflows/` | Stream A |
