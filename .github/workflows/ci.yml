@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: contracts (types up to date, OpenAPI lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: 0.9.18
+      - run: make setup
+      - run: make types-check
+      - run: make lint-contracts
+
+  gateway:
+    name: gateway (lint, types, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: 0.9.18
+      - run: make setup
+      - run: make lint
+      - run: make typecheck
+      - run: make test
+
+  compose:
+    name: compose (both Postgres DBs come up)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose --profile app config -q
+      - run: make db
+      - name: prod-db has Mulligan's schemas and read-only role
+        run: |
+          docker compose exec -T prod-db psql -U acme -d acme -v ON_ERROR_STOP=1 -tAc \
+            "select count(*) from pg_namespace where nspname in ('mulligan_trash','mulligan_audit')" | grep -qx 2
+          docker compose exec -T prod-db psql -U acme -d acme -v ON_ERROR_STOP=1 -tAc \
+            "select rolname from pg_roles where rolname = 'mulligan_reader'" | grep -qx mulligan_reader
+      - name: mulligan-db has TimescaleDB
+        run: |
+          docker compose exec -T mulligan-db psql -U mulligan -d mulligan -v ON_ERROR_STOP=1 -tAc \
+            "select extname from pg_extension where extname = 'timescaledb'" | grep -qx timescaledb
+      - if: always()
+        run: docker compose down -v
