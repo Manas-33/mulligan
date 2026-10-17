@@ -1,0 +1,42 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+
+# Data / artifacts
+classifier/data/raw/
+classifier/data/*.jsonl
+!classifier/data/sample.jsonl
+*.dump
+*.sql.gz
+demo/.state/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local
+.claude/settings.local.json
