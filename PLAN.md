@@ -20,7 +20,7 @@ Source: `MULLIGAN_IDEA.md`. No code until this plan is approved.
 | | **Stream A — Core and Undo** | **Stream B — Holds, Approvals, Classifier and all UI** |
 |---|---|---|
 | Owns | `gateway/` core (MCP server, action log, undo orchestrator), `gateway/mulligan/adapters/{postgres,github,notion}`, `demo/` (seed company, rogue agent live run and replay, mock upstream MCP server, reset, checksums), `fetch-agent/`, `infra/` | `dashboard/` (**all UI, sole owner**), `approvals-photon/` (TS), `gateway/mulligan/holds/` (email and payments adapters, approval state machine), `gateway/mulligan/classify/` (policy lookup and the classifier gate for unknown tools) and `classifier/` (dataset and Veri training) |
-| Sponsor surface | Fetch.ai, Devin, MLH (Tiger Data, Vultr, GoDaddy), Sentry backend | Photon, Visa/Stripe, veri.studio, Paper, Sentry frontend (Session Replay), StepFun |
+| Sponsor surface | Fetch.ai, Devin, Sentry backend | Photon, Visa/Stripe, veri.studio, Paper, Sentry frontend (Session Replay), StepFun |
 
 Stream B owns the UI outright, so Stream A ships no UI code. Stream A's only UI-facing outputs are the REST API and the SSE events in the contracts.
 
@@ -55,7 +55,7 @@ mulligan/
 ├── classifier/                # B: data/ (APIs.guru → SFT JSONL), configs/ (Veri), eval/
 ├── fetch-agent/               # A: uAgents Guardian + worker (tests/)
 ├── demo/                      # A: seed/, scripts/ (rogue agent live + replay, teammate edit, reset), recordings/, upstream/, checksums/
-├── infra/                     # A: db/mulligan-db/, db/prod-db/ (audit triggers, read-only role, mulligan_trash), deploy/
+├── infra/                     # A: db/mulligan-db/, db/prod-db/ (audit triggers, read-only role, mulligan_trash), deploy/ (cloudflared tunnel)
 ├── spikes/                    # Phase 0 throwaway scripts, one NN-name/ folder per check
 ├── docs/SDK_NOTES.md          # both: pinned versions + gotchas per SDK (append only)
 └── .github/workflows/         # A: CI
@@ -75,7 +75,7 @@ Each spike yields: a pass/fail result, the exact SDK version, and the gotchas, w
 | # | Check | Owner | Pass criteria |
 |---|---|---|---|
 | 0.1 | **MCP over Streamable HTTP from Claude Code.** A minimal FastMCP server (official `mcp` SDK) mounted in FastAPI. Connect with `claude mcp add --transport http mulligan <url> --header "Authorization: Bearer <token>"`. | A | Claude Code lists the tool, calls it, and the server sees the bearer token and the MCP session id. |
-| 0.2 | **MCP from Devin.** The same server exposed publicly (cloudflared tunnel or a Vultr box), added in Devin under Customize → MCPs → custom → HTTP with an Auth Header. | A | Devin's "Test tools" passes and a Devin session calls the tool. |
+| 0.2 | **MCP from Devin.** The same server exposed publicly through a cloudflared tunnel, added in Devin under Customize → MCPs → custom → HTTP with an Auth Header. | A | Devin's "Test tools" passes and a Devin session calls the tool. |
 | 0.3 | **Postgres typed-tool undo.** Typed write tools (`pg_insert_rows`, `pg_update_rows`, `pg_delete_rows`) build parameterized SQL from a structured filter, never from an SQL string. A generic audit trigger reads `current_setting('mulligan.action_id', true)` (set with `SET LOCAL` per action txn) and writes old/new `jsonb` rows, including rows removed by `ON DELETE CASCADE`. A script runs each tool, then replays the inverse. Undo must put parent rows back before their children: a cascade deletes the parent first, so plain reverse audit order would re-insert children first and break the FK. Either sort re-inserts by FK dependency (parents first) or make FKs `DEFERRABLE` and run undo under `SET CONSTRAINTS ALL DEFERRED`. Pick one here and record it. `pg_drop_table` is a soft drop: `ALTER TABLE ... SET SCHEMA mulligan_trash` plus a rename, and undo moves the table back. Run on TimescaleDB-compatible Postgres. | A | The table checksum after undo equals the checksum before, including a parent delete that cascaded into 2+ child tables. A dropped table comes back with its data, PK, indexes and the foreign keys that point at it, and the agent's read-only role can't see `mulligan_trash`. A runaway `pg_query` is killed by `statement_timeout`. |
 | 0.4 | **Notion restore.** Capture a page's properties and full block tree, let a "rogue" edit rewrite and trash it, then restore it. Then repeat, but hand-edit one block the rogue edit wrote before restoring, and spot it with a hash of each property and block the rogue edit wrote. Check which API version is current and its trash field (`archived` vs `in_trash`). | A | The restored page's normalized content hash matches the original. On the repeat, the hand-edited block is kept and flagged, and everything else matches. Note any block types the API can't recreate. |
 | 0.5 | **Fetch agent in ASI:One.** A `uagents` agent with `mailbox=True`, `publish_agent_details=True` and the chat protocol (`chat_protocol_spec`, `ChatMessage`, `ChatAcknowledgement`), connected through the Inspector. | A | The agent is findable on Agentverse, and "Chat with Agent" in ASI:One gets a reply. |
@@ -84,7 +84,7 @@ Each spike yields: a pass/fail result, the exact SDK version, and the gotchas, w
 | 0.8 | **Sentry MCP monitoring.** Turn on Python SDK tracing and the MCP integration (check its name and minimum versions, since the docs page doesn't say). | B | Sentry shows a `tools/call <name>` span with `mcp.tool.name` and `mcp.session.id`. |
 | 0.9 | **Veri credits and CLI.** Redeem credits, then run `veri login`, `veri init`, `veri datasets check` on a 10-row JSONL and `veri jobs estimate`. | B | The estimate returns and the balance is above 0. |
 
-**Exit checklist:** All 9 spikes pass, or have a written fallback (for example 0.2 falls back to Devin over a public Vultr URL, and 0.6 falls back to the local iMessage provider). `docs/SDK_NOTES.md` is filled in.
+**Exit checklist:** All 9 spikes pass, or have a written fallback (for example 0.2 falls back to using Devin only to build code, not as a protected agent, and 0.6 falls back to the local iMessage provider). `docs/SDK_NOTES.md` is filled in.
 **STOP — approval gate.**
 
 ---
@@ -253,7 +253,7 @@ GOAL: A Veri-trained classifier is served and gates upstream tools with >=90% ac
 
 ## Phase 5 — Hardening, observability and deploy (parallel)
 
-**Stream A:** Deploy to Vultr (gateway plus both DBs) behind the GoDaddy domain with TLS. Set up a Sentry Uptime monitor on `/healthz`, Sentry Logs and AI agent monitoring, backups of the action log, and a load check (200 actions in the log, rewind under 30 s). Add a Claude Code `PreToolUse` hook config (docs check against code.claude.com/docs/en/hooks) for demo laptops that blocks direct DB, `gh` and curl calls, so the only route is Mulligan.
+**Stream A:** Run the gateway and both DBs on the demo laptop, with a cloudflared tunnel giving the gateway a public HTTPS URL for Devin. A quick tunnel's URL changes whenever it restarts, so keep it running and update Devin's MCP settings if it does. Set up Sentry Logs and AI agent monitoring, backups of the action log, and a load check (200 actions in the log, rewind under 30 s). Add a Claude Code `PreToolUse` hook config (docs check against code.claude.com/docs/en/hooks) for demo laptops that blocks direct DB, `gh` and curl calls, so the only route is Mulligan.
 **Stream B:** Deploy the dashboard and Photon service. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, the Veri eval and the Photon flow).
 
 **STOP — approval gate.**
@@ -263,10 +263,10 @@ GOAL: A Veri-trained classifier is served and gates upstream tools with >=90% ac
 ## Phase 6 — Final review (2 iterations, both streams)
 
 ```
-GOAL: No known correctness bug in the undo path, no secret reachable by an agent, and the demo passes 5 clean replay runs in a row plus 2 live runs on the deployed stack.
+GOAL: No known correctness bug in the undo path, no secret reachable by an agent, and the demo passes 5 clean replay runs in a row plus 2 live runs on the demo laptop.
 ```
 - **Review iteration 1:** Each person runs `/code-review high` on the other stream's code, then `/security-review` (credential isolation, token scoping, `pg_query`'s read-only enforcement and the typed tools' SQL building, SSRF in adapters and the upstream pass-through). Check the contracts against the implementation, fill test-coverage gaps on revert and conflict-detection paths, and fix everything found.
-- **Review iteration 2:** Re-run the reviews on the fix diff and run the full end-to-end demo on the deployed stack 5 times from the replay and twice live. Fix remaining bugs, freeze `main` and tag `v1-demo`.
+- **Review iteration 2:** Re-run the reviews on the fix diff and run the full end-to-end demo on the demo laptop 5 times from the replay and twice live. Fix remaining bugs, freeze `main` and tag `v1-demo`.
 
 **STOP — final approval.**
 

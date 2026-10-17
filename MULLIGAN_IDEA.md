@@ -30,14 +30,13 @@ Mulligan is the layer agents act through. Agents connect to Mulligan as an MCP s
 
 | Sponsor | What they require | How Mulligan addresses it |
 |---|---|---|
-| **Sentry** | Use 2+ products beyond error monitoring; show how the data shaped the build | Tracing on every action and undo; MCP server monitoring; AI agent monitoring; Logs; Session Replay on the dashboard; Uptime on the gateway. Every timeline row links to its Sentry trace. |
+| **Sentry** | Use 2+ products beyond error monitoring; show how the data shaped the build | Tracing on every action and undo; MCP server monitoring; AI agent monitoring; Logs; Session Replay on the dashboard. Every timeline row links to its Sentry trace. |
 | **Cognition (Devin)** | Build with Devin; judged on creativity, novelty, polish | Use Devin to build parts of Mulligan, and connect Devin to Mulligan as a protected agent via custom MCP. |
 | **Fetch.ai** | Agent on Agentverse with Chat Protocol, usable in ASI:One; the main workflow happens inside ASI:One chat; bonus for multi-agent and Payment Protocol | A Guardian agent in ASI:One runs a protected task through a worker agent, shows what happened and what's held, and undoes on "rewind" in chat. Optional fee per protected session via Payment Protocol. |
 | **Photon** | Built on Photon 2.0, live on a Photon channel (iMessage prize; separate voice prize) | iMessage approvals for held actions ("Reply YES 4821") and post-rewind summaries. Stretch: a voice call for the riskiest actions. |
 | **Visa** | AI that improves shopping/payments, weighted on trust & responsibility | Agent purchases with an undo window: authorize now, capture later, cancel on rewind. Confirm with Visa mentors which Visa tools they expect. |
 | **veri.studio** | Train an open-source model on their platform | Fine-tune the small model that labels unknown MCP tools from their schema. It only sees tools with no policy entry, and when it's unsure the call is held. |
 | **Paper** | Use Paper (desktop app + MCP); judged on design craft that doesn't look AI-generated | Design the Mulligan dashboard in Paper. |
-| **MLH** | Per prize | Tiger Data for the action log, a GoDaddy domain, Vultr to host the gateway. |
 | **StepFun** (optional) | App calls `step-5-preview` at runtime | Use Step 5 Preview to write the plain-English explanation of each action. |
 
 Not targeted: Creao (its rule is that an agent built on agent.creao.ai does the project's core work, and Mulligan's core is its own gateway), Intuit, Workday, Base44, and the hardware challenges (QNX, Espressif, Even Realities).

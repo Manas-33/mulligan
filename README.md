@@ -29,7 +29,7 @@ mulligan/
 ├── classifier/           # B: dataset builder (APIs.guru), Veri training configs, eval
 ├── fetch-agent/          # A: uAgents Guardian + worker agents (ASI:One)
 ├── demo/                 # A: seeded fake company, rogue agent (live + replay), mock upstream MCP server, reset, checksums
-├── infra/                # A: docker-compose DB init, deploy (Vultr)
+├── infra/                # A: docker-compose DB init, cloudflared tunnel for Devin
 ├── spikes/               # Phase 0 throwaway de-risk scripts
 ├── docs/
 └── .github/workflows/    # CI
