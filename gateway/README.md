@@ -4,11 +4,11 @@ The MCP server (Streamable HTTP) that agents connect to. It holds every real cre
 
 | Module | Owner | Purpose |
 |---|---|---|
-| `rewind/mcp/` | A | MCP server and tool registry, per-agent bearer auth |
-| `rewind/api/` | A | REST `/api/*` and SSE `/api/events` |
-| `rewind/log/` | A | Action log in TimescaleDB |
-| `rewind/orchestrator/` | A | Rewind plan, reverse dependency order, verification |
-| `rewind/adapters/{postgres,github,notion}/` | A | Capture before/after, execute, revert, checksum |
-| `rewind/holds/` | B | Email and payments held channels, approval state machine |
-| `rewind/classify/` | B | Reversibility classifier client with rules fallback |
-| `migrations/` | A | rewind-db schema |
+| `mulligan/mcp/` | A | MCP server, typed tool registry (no raw SQL writes), upstream MCP pass-through, per-agent bearer auth |
+| `mulligan/api/` | A | REST `/api/*` and SSE `/api/events` |
+| `mulligan/log/` | A | Action log in TimescaleDB |
+| `mulligan/orchestrator/` | A | Rewind plan (newest action first), verification against the expected state |
+| `mulligan/adapters/{postgres,github,notion}/` | A | Capture before/after and field hashes, execute, revert (skipping fields a human changed), checksum |
+| `mulligan/holds/` | B | Email and payments held channels, approval state machine |
+| `mulligan/classify/` | B | Policy table lookup for built-in tools, and the classifier gate for upstream tools (fails closed) |
+| `migrations/` | A | mulligan-db schema |

@@ -7,15 +7,15 @@ Two people, each running a separate Claude Code session. The full process is in 
 | Path | Owner |
 |---|---|
 | `contracts/` | **Shared.** Change only through a PR that both people approve. |
-| `gateway/rewind/{api,mcp,log,orchestrator,adapters}/`, `gateway/migrations/`, `gateway/rewind/app.py`, `gateway/pyproject.toml` | Stream A |
-| `gateway/rewind/holds/`, `gateway/rewind/classify/` | Stream B |
+| `gateway/mulligan/{api,mcp,log,orchestrator,adapters}/`, `gateway/migrations/`, `gateway/mulligan/app.py`, `gateway/pyproject.toml` | Stream A |
+| `gateway/mulligan/holds/`, `gateway/mulligan/classify/` | Stream B |
 | `approvals-photon/`, `dashboard/`, `classifier/` | Stream B |
 | `fetch-agent/`, `demo/`, `infra/`, `docker-compose.yml`, `Makefile`, `.github/workflows/` | Stream A |
 | `spikes/<NN>-name/` | Whoever owns that spike in PLAN.md Phase 0 |
 | `docs/SDK_NOTES.md` | Both. Append only, one section per SDK. |
 
 - All UI is Stream B's. Stream A never adds UI code. It exposes data only through the REST API and SSE events in `contracts/`.
-- Stream B's code inside `gateway/` plugs in through the `Adapter`, `HoldManager` and `Classifier` interfaces. To change a shared gateway file, open a PR and ask Stream A to review it.
+- Stream B's code inside `gateway/` plugs in through the `Adapter`, `HoldManager`, `Policy` and `Classifier` interfaces. To change a shared gateway file, open a PR and ask Stream A to review it.
 
 ## Git
 
