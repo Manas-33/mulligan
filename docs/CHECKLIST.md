@@ -22,7 +22,7 @@
 - [ ] Submit through the ASI:One Submission Agent (separate from Devpost).
 - [ ] Final reset and replay run on the demo laptop.
 
-## Person B — approvals, classifier, all UI
+## Person B — approvals, rules gate, all UI
 
 **Tonight, before coding**
 - [ ] **Photon:**
@@ -35,7 +35,6 @@
   - Turn on Session Replay and Logs.
 - [ ] **Stripe:** a test or sandbox account and an `sk_test_` key.
 - [ ] **Email:** decide between Mailpit (no account needed) and Resend test mode (open question 3).
-- [ ] **Veri:** DM @daniung on Discord for credits and redeem them before the first job (jobs on a $0 balance are stopped). Also a Hugging Face account and token, to push merged weights.
 - [ ] **Paper:** redeem `LAHACKS26`, install the desktop app and connect its MCP.
 - [ ] **StepFun:**
   - Get an API key from platform.stepfun.ai.
@@ -44,7 +43,6 @@
 
 **While building (judges ask for this)**
 - [ ] **Sentry story:** screenshot a real trace, replay or log that led to a fix, and note the commit.
-- [ ] Veri eval report: confusion matrix and unsafe-miss count.
 - [ ] The Paper file link plus screenshots. Ask Paper how they judge, since their page lists no submission format.
 - [ ] StepFun write-up: what each model does alongside Step 5 Preview, which their rules require.
 
@@ -63,7 +61,7 @@
 - [ ] **Pitch prep:** a 2-minute table pitch for Round 1 and the stage demo for Round 2. Have answers ready for:
   - "How is this different from Rubrik Agent Rewind?"
   - "Why not just use backups?"
-  - "What if the model mislabels a tool?"
+  - "What if the rules mislabel a tool?" (it fails closed: anything not clearly read-only is held)
 - [ ] **Demo kit:** a phone hotspot in case the venue Wi-Fi fails, chargers, and `make demo-reset` between judges.
 - [ ] **After the event:**
   - Cancel Paper Pro before it renews, or email proof of enrollment for the free year.

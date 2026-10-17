@@ -25,9 +25,6 @@ npm-debug.log*
 pnpm-debug.log*
 
 # Data / artifacts
-classifier/data/raw/
-classifier/data/*.jsonl
-!classifier/data/sample.jsonl
 *.dump
 *.sql.gz
 demo/.state/

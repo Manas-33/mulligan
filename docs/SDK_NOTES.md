@@ -17,8 +17,6 @@ Docs: <url>  ·  Checked: YYYY-MM-DD by <A|B>
 - Fetch ASI:One agent: https://uagents.fetch.ai/docs/examples/asi-1
 - Photon spectrum-ts: https://photon.codes/docs/spectrum-ts/introduction
 - Sentry MCP monitoring (Python): https://docs.sentry.io/platforms/python/tracing/instrumentation/custom-instrumentation/mcp-module/
-- veri.studio: https://www.veri.studio/lahacks
-- APIs.guru: https://apis.guru
 
 ## Entries
 

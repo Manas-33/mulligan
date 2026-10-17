@@ -17,10 +17,10 @@ Source: `MULLIGAN_IDEA.md`. No code until this plan is approved.
 
 ## The two workstreams
 
-| | **Stream A — Core and Undo** | **Stream B — Holds, Approvals, Classifier and all UI** |
+| | **Stream A — Core and Undo** | **Stream B — Holds, Approvals, Rules Gate and all UI** |
 |---|---|---|
-| Owns | `gateway/` core (MCP server, action log, undo orchestrator), `gateway/mulligan/adapters/{postgres,github,notion}`, `demo/` (seed company, rogue agent live run and replay, mock upstream MCP server, reset, checksums), `fetch-agent/`, `infra/` | `dashboard/` (**all UI, sole owner**), `approvals-photon/` (TS), `gateway/mulligan/holds/` (email and payments adapters, approval state machine), `gateway/mulligan/classify/` (policy lookup and the classifier gate for unknown tools) and `classifier/` (dataset and Veri training) |
-| Sponsor surface | Fetch.ai, Devin, Sentry backend | Photon, Visa/Stripe, veri.studio, Paper, Sentry frontend (Session Replay), StepFun |
+| Owns | `gateway/` core (MCP server, action log, undo orchestrator), `gateway/mulligan/adapters/{postgres,github,notion}`, `demo/` (seed company, rogue agent live run and replay, mock upstream MCP server, reset, checksums), `fetch-agent/`, `infra/` | `dashboard/` (**all UI, sole owner**), `approvals-photon/` (TS), `gateway/mulligan/holds/` (email and payments adapters, approval state machine), `gateway/mulligan/classify/` (policy lookup and the rules gate for unknown upstream tools) |
+| Sponsor surface | Fetch.ai, Devin, Sentry backend | Photon, Visa/Stripe, Paper, Sentry frontend (Session Replay), StepFun |
 
 Stream B owns the UI outright, so Stream A ships no UI code. Stream A's only UI-facing outputs are the REST API and the SSE events in the contracts.
 
@@ -47,12 +47,11 @@ mulligan/
 │   │   │   ├── github/        #   A
 │   │   │   └── notion/        #   A
 │   │   ├── holds/             #   B: email + payments holds, approval state machine
-│   │   └── classify/          #   B: policy lookup + classifier gate for unknown tools
+│   │   └── classify/          #   B: policy lookup + rules gate for unknown upstream tools
 │   ├── migrations/            #   A: mulligan-db schema
 │   └── tests/
 ├── approvals-photon/          # B: TypeScript spectrum-ts service (src/, test/)
 ├── dashboard/                 # B: React + Vite. ALL UI (src/, public/)
-├── classifier/                # B: data/ (APIs.guru → SFT JSONL), configs/ (Veri), eval/
 ├── fetch-agent/               # A: uAgents Guardian + worker (tests/)
 ├── demo/                      # A: seed/, scripts/ (rogue agent live + replay, teammate edit, reset), recordings/, upstream/, checksums/
 ├── infra/                     # A: db/mulligan-db/, db/prod-db/ (audit triggers, read-only role, mulligan_trash), deploy/ (cloudflared tunnel)
@@ -82,9 +81,8 @@ Each spike yields: a pass/fail result, the exact SDK version, and the gotchas, w
 | 0.6 | **Photon iMessage send/reply.** `spectrum-ts` with `Spectrum({projectId, projectSecret, providers:[imessage.config()]})`. Send a message, read a reply from `app.messages`. Decide between the cloud and local provider. | B | A phone gets "Reply YES 4821", and the reply is parsed within 5 s. |
 | 0.7 | **Stripe manual capture.** A test-mode PaymentIntent with `capture_method=manual`. Confirm with a test card, then capture one and cancel another. Note the authorization expiry window. | B | One intent ends `succeeded`, the other `canceled`. |
 | 0.8 | **Sentry MCP monitoring.** Turn on Python SDK tracing and the MCP integration (check its name and minimum versions, since the docs page doesn't say). | B | Sentry shows a `tools/call <name>` span with `mcp.tool.name` and `mcp.session.id`. |
-| 0.9 | **Veri credits and CLI.** Redeem credits, then run `veri login`, `veri init`, `veri datasets check` on a 10-row JSONL and `veri jobs estimate`. | B | The estimate returns and the balance is above 0. |
 
-**Exit checklist:** All 9 spikes pass, or have a written fallback (for example 0.2 falls back to using Devin only to build code, not as a protected agent, and 0.6 falls back to the local iMessage provider). `docs/SDK_NOTES.md` is filled in.
+**Exit checklist:** All 8 spikes pass, or have a written fallback (for example 0.2 falls back to using Devin only to build code, not as a protected agent, and 0.6 falls back to the local iMessage provider). `docs/SDK_NOTES.md` is filled in.
 **STOP — approval gate.**
 
 ---
@@ -112,8 +110,8 @@ status            pending|held|approved|rejected|executing|executed|failed|
                   reverting|reverted|conflict|revert_failed|expired
                   (conflict: the rewind kept one or more fields a human changed)
 reversibility     { label: read_only|reversible|reversible_noisy|compensable|irreversible,
-                    confidence, source: policy|model|override }
-                  (policy for every built-in tool; model only for upstream tools)
+                    source: policy|rules|override }
+                  (policy for every built-in tool; rules only for upstream tools)
 before_ref        opaque pointer to the captured before-state (per adapter)
 after_ref         opaque pointer to the after-state
 after_hashes      { "<field path>": sha256 } hash of every field the action changed,
@@ -164,14 +162,14 @@ Built-in tools: `pg_query`, `pg_insert_rows`, `pg_update_rows`, `pg_delete_rows`
 - **Soft drop.** `pg_drop_table` moves the table into the `mulligan_trash` schema, which agents can't see, and renames it `<table>__<action_id>`. Undo moves it back. Trashed tables are purged only after the undo window closes.
   - **Known difference from a real `DROP`:** moving a table keeps every foreign key that points at it, and so does a rename. A real `DROP` without `CASCADE` would fail on those FKs, and `DROP ... CASCADE` would remove them. Mulligan does neither: the drop always succeeds, referencing tables keep working against the trashed table, and undo needs no FK repair. The tool's result tells the agent which FKs still reference the table, and the action log records them. This is deliberate. Don't "fix" it by dropping FKs.
 - **Undo order inside one action.** An action's audit rows are reverted newest first, except that re-inserted rows go parents first (the method chosen in spike 0.3), so cascaded deletes come back without FK errors.
-- **Policy table.** `reversibility_policy.yaml` gives every built-in tool its label. It is the authority: the gateway won't start if a built-in tool has no entry, and the classifier is never asked about built-in tools.
-- **Upstream tools.** Tools from MCP servers placed behind Mulligan are exposed as `upstream__<server>__<tool>`. They have no policy entry and no undo adapter, so every call goes through the classifier gate (1.5).
+- **Policy table.** `reversibility_policy.yaml` gives every built-in tool its label. It is the authority: the gateway won't start if a built-in tool has no entry, and the rules gate is never asked about built-in tools.
+- **Upstream tools.** Tools from MCP servers placed behind Mulligan are exposed as `upstream__<server>__<tool>`. They have no policy entry and no undo adapter, so every call goes through the rules gate (1.5).
 
 ### 1.5 Python interfaces (`gateway/mulligan/interfaces.py`)
 - `Adapter.capture_before(call) -> ref`, `execute(call) -> result`, `capture_after(...) -> (ref, after_hashes)`, `build_inverse(...)`, `revert(action) -> StepResult`, `checksum() -> str`. `revert` re-reads every field in `after_hashes` and restores only the fields whose current hash still matches. The others come back as `kept_human_edit` in `kept_fields`. Nothing is merged.
 - `HoldManager.hold(action)`, `on_decision(action_id, decision)`, `release_due()`, `cancel(action)`
 - `Policy.lookup(tool) -> Reversibility | None` reads `contracts/reversibility_policy.yaml`.
-- `Classifier.classify_unknown(tool_schema) -> Reversibility` runs only when `Policy.lookup` returns None. The gateway lets the call through only if the label is `read_only` with confidence at or above `CLASSIFIER_MIN_CONFIDENCE`. Any other label, a timeout or an error holds the call for approval. Stream A ships a stub that always returns `irreversible` (hold everything), and Stream B replaces it.
+- `Classifier.classify_unknown(tool_schema) -> Reversibility` runs only when `Policy.lookup` returns None. It is a deterministic rules check, not a model. The gateway lets the call through only if the label is `read_only`. Any other label, or an error, holds the call for approval (fail closed). Stream A ships a stub that always returns `irreversible` (hold everything), and Stream B replaces it with the rules gate. The interface stays, so a trained model could be swapped in later without touching the gateway.
 
 ### 1.6 Skeleton
 The folder layout already exists (see "Repo structure" above). Phase 1 adds `pyproject.toml` / `package.json` per package, the `Makefile`, and `docker-compose.yml`: `mulligan-db` (timescale/timescaledb), `prod-db` (postgres:16, the demo company, with the audit triggers, a read-only role for `pg_query` and the `mulligan_trash` schema), `gateway`, `approvals-photon`, `dashboard`. Mock servers come from the OpenAPI spec (Prism) so Stream B's UI can start right away. CI runs lint, type checks, unit tests and contract type generation with a diff check.
@@ -207,7 +205,7 @@ GOAL: The Photon service delivers an approval text for a held action and turns t
 
 ---
 
-## Phase 3 — Multi-system undo, holds and classifier (parallel)
+## Phase 3 — Multi-system undo, holds and rules gate (parallel)
 
 **Stream A**
 ```
@@ -217,15 +215,15 @@ GOAL: One rewind restores Postgres, GitHub and Notion together, newest action fi
 - Notion adapter, building on the 0.4 spike: block-tree snapshot and restore, untrash, property restore. Conflict detection: hash each property and block the agent wrote. A property or block whose hash changed is kept and flagged, and the rest of the page is restored.
 - Postgres conflict detection: compare each (row, column) hash in `after_hashes` with the current value. A changed column is kept and flagged, and the row's other columns are still restored. If a human reused the primary key of a row the agent deleted, or the name of a table it dropped, that step is a conflict and is skipped.
 - Orchestrator v2: a cross-system plan in reverse time order (no dependency graph), `rewind to timestamp`, partial-failure reporting, and per-system verification against the expected state.
-- Upstream MCP pass-through: register MCP servers behind Mulligan (`UPSTREAM_MCP_SERVERS`), expose their tools as `upstream__<server>__<tool>`, and send every call through `Policy.lookup` and the classifier gate. These calls are logged but can't be undone. `demo/upstream/` holds a small mock Slack MCP server (`list_channels`, `post_message`) for the demo.
+- Upstream MCP pass-through: register MCP servers behind Mulligan (`UPSTREAM_MCP_SERVERS`), expose their tools as `upstream__<server>__<tool>`, and send every call through `Policy.lookup` and the rules gate. These calls are logged but can't be undone. `demo/upstream/` holds a small mock Slack MCP server (`list_channels`, `post_message`) for the demo.
 
 **Stream B**
 ```
-GOAL: email_send and payments_charge are held. The iMessage approval releases them, rewind cancels payments that haven't been captured, every built-in tool gets its label from the policy table, and upstream tools go through the classifier gate.
+GOAL: email_send and payments_charge are held. The iMessage approval releases them, rewind cancels payments that haven't been captured, every built-in tool gets its label from the policy table, and upstream tools go through the rules gate.
 ```
 - Email hold: an outbox table. Send only after approval, through a sandbox provider or Mailpit in the demo. After a send, the action is `irreversible`, and rewind marks it `skipped` and offers a compensating correction email.
 - Payments: Stripe test mode with `capture_method=manual`. Capture when `release_at` passes the undo window, and cancel on rewind.
-- Classifier v0: replace Stream A's hold-everything stub with a heuristic over the tool schema (verbs in the name and description, the HTTP method if there is one), same interface. Dataset builder: APIs.guru operations turned into MCP-style tool schemas (name, description, input schema), auto-labeled by HTTP method and path heuristics, then hand-corrected, written as SFT JSONL (`prompt`, `answer`). Our built-in tools go in the eval set only, since the policy table already gives their labels.
+- Rules gate: replace Stream A's hold-everything stub with a deterministic check over the tool schema, same interface. A tool is `read_only` only if its name starts with a read verb (`get`, `list`, `search`, `read`, `fetch`, `describe`), its description has no write verb (`send`, `post`, `create`, `update`, `delete`, `remove`, `pay`, `charge`, `invite`, `publish`), and the MCP `readOnlyHint` annotation isn't false. Everything else is held. Unit tests cover both mock Slack tools, plus our built-in tools as a sanity check: only the read tools (`pg_query`, `github_list_issues`, `notion_get_page`, `mulligan_status`) may come out `read_only`. The label's reason (which rule fired) is stored so the dashboard can explain why a call was held.
 - Dashboard: timeline with system lanes, a held-actions panel, the rewind dialog (dry-run diff, then run), live rewind progress, a checksum panel, Sentry trace links, a "not undoable" marker on upstream calls and a "replay" badge on replay sessions.
 
 **Integration checkpoint:** A scripted 6-action session across all five systems, plus one upstream `post_message` call that gets held, rewinds cleanly, and the UI shows every step.
@@ -233,7 +231,7 @@ GOAL: email_send and payments_charge are held. The iMessage approval releases th
 
 ---
 
-## Phase 4 — Demo, agents and the trained model (parallel)
+## Phase 4 — Demo, agents and dashboard polish (parallel)
 
 **Stream A**
 ```
@@ -248,9 +246,8 @@ GOAL: `make demo-reset && make demo-replay` reproduces the pitch scenario determ
 
 **Stream B**
 ```
-GOAL: A Veri-trained classifier is served and gates upstream tools with >=90% accuracy and zero unsafe misses on a held-out set, and the dashboard is demo-ready to the Paper design.
+GOAL: The dashboard is demo-ready to the Paper design, and every held action shows why it was held.
 ```
-- Fine-tune Qwen3-0.6B or 1.7B on Veri to label tool schemas (SFT, push merged weights to HF if using LoRA, deploy with `veri deployments create`). An unsafe miss is a tool that writes but is labeled `read_only` at or above the threshold, so it would run without approval. Set `CLASSIFIER_MIN_CONFIDENCE` from the eval so there are none. On a timeout or error the gateway holds the call (fail closed). Publish an eval report with the confusion matrix and the unsafe-miss count.
 - StepFun `step-5-preview` explanations per action (optional, cached, async so the action path never waits on it).
 - Dashboard polish: the "Rewind" button moment, before/after diffs per system, kept-human-edit flags (which field, the human's value and what the agent had written), a checksum proof view (expected vs. actual) and the iMessage summary after a rewind.
 
@@ -266,7 +263,7 @@ GOAL: `docker compose up` on the demo laptop runs the whole stack (both DBs, gat
 ```
 
 **Stream A:** Run the gateway and both DBs on the demo laptop under `docker compose`. A free cloudflared quick tunnel points at the MCP port (`:8001`) only, giving Devin a public HTTPS URL. A quick tunnel's URL changes whenever it restarts, so keep it running and update Devin's MCP settings if it does. Add a check script that hits the tunnel URL and confirms `/api/*` isn't reachable there, and that every local route returns 401 without a token. Set up Sentry Logs and AI agent monitoring, backups of the action log, and a load check (200 actions in the log, rewind under 30 s). Add a Claude Code `PreToolUse` hook config (docs check against code.claude.com/docs/en/hooks) for demo laptops that blocks direct DB, `gh` and curl calls, so the only route is Mulligan.
-**Stream B:** Add the dashboard (built with Vite and served from its compose service) and the Photon service to `docker compose`, both talking to the gateway on `127.0.0.1:8000`. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, the Veri eval and the Photon flow).
+**Stream B:** Add the dashboard (built with Vite and served from its compose service) and the Photon service to `docker compose`, both talking to the gateway on `127.0.0.1:8000`. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, and the Photon flow).
 
 **STOP — approval gate.**
 

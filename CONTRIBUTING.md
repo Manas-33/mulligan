@@ -9,7 +9,7 @@ Two people, each running a separate Claude Code session. The full process is in 
 | `contracts/` | **Shared.** Change only through a PR that both people approve. |
 | `gateway/mulligan/{api,mcp_server,log,orchestrator,adapters}/`, `gateway/migrations/`, `gateway/mulligan/app.py`, `gateway/pyproject.toml` | Stream A |
 | `gateway/mulligan/holds/`, `gateway/mulligan/classify/` | Stream B |
-| `approvals-photon/`, `dashboard/`, `classifier/` | Stream B |
+| `approvals-photon/`, `dashboard/` | Stream B |
 | `fetch-agent/`, `demo/`, `infra/`, `docker-compose.yml`, `Makefile`, `.github/workflows/` | Stream A |
 | `spikes/<NN>-name/` | Whoever owns that spike in PLAN.md Phase 0 |
 | `docs/SDK_NOTES.md` | Both. Append only, one section per SDK. |

@@ -21,12 +21,11 @@ mulligan/
 │   │   ├── orchestrator/ #   A: rewind planning (newest action first), verification
 │   │   ├── adapters/     #   A: postgres/ github/ notion/  (real undo, conflict detection)
 │   │   ├── holds/        #   B: email + payments held channels, approval state machine
-│   │   └── classify/     #   B: policy lookup + classifier gate for unknown tools
+│   │   └── classify/     #   B: policy lookup + rules gate for unknown upstream tools
 │   ├── migrations/       #   A: mulligan-db schema
 │   └── tests/
 ├── approvals-photon/     # B: TypeScript, spectrum-ts iMessage approvals service
 ├── dashboard/            # B: React + Vite. All UI lives here and only here.
-├── classifier/           # B: dataset builder (APIs.guru), Veri training configs, eval
 ├── fetch-agent/          # A: uAgents Guardian + worker agents (ASI:One)
 ├── demo/                 # A: seeded fake company, rogue agent (live + replay), mock upstream MCP server, reset, checksums
 ├── infra/                # A: docker-compose DB init, cloudflared tunnel for Devin
@@ -35,7 +34,7 @@ mulligan/
 └── .github/workflows/    # CI
 ```
 
-**A** = Stream A (Core and Undo). **B** = Stream B (Holds, Approvals, Classifier, all UI). See the ownership rules in [CONTRIBUTING.md](CONTRIBUTING.md).
+**A** = Stream A (Core and Undo). **B** = Stream B (Holds, Approvals, Rules Gate, all UI). See the ownership rules in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Getting started
 
