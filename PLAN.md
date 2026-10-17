@@ -75,7 +75,7 @@ Each spike yields: a pass/fail result, the exact SDK version, and the gotchas, w
 | # | Check | Owner | Pass criteria |
 |---|---|---|---|
 | 0.1 | **MCP over Streamable HTTP from Claude Code.** A minimal FastMCP server (official `mcp` SDK) mounted in FastAPI. Connect with `claude mcp add --transport http mulligan <url> --header "Authorization: Bearer <token>"`. | A | Claude Code lists the tool, calls it, and the server sees the bearer token and the MCP session id. |
-| 0.2 | **MCP from Devin.** The same server exposed publicly through a cloudflared tunnel, added in Devin under Customize → MCPs → custom → HTTP with an Auth Header. | A | Devin's "Test tools" passes and a Devin session calls the tool. |
+| 0.2 | **MCP from Devin.** The same server with MCP on its own port (`:8001`) and a dummy REST route on `127.0.0.1:8000`, both in one process. A free cloudflared quick tunnel (`cloudflared tunnel --url http://localhost:8001`, no account) exposes only the MCP port. Added in Devin under Customize → MCPs → custom → HTTP with an Auth Header. | A | Devin's "Test tools" passes and a Devin session calls the tool. The REST route can't be reached through the tunnel URL, and an MCP call without the bearer token gets a 401. |
 | 0.3 | **Postgres typed-tool undo.** Typed write tools (`pg_insert_rows`, `pg_update_rows`, `pg_delete_rows`) build parameterized SQL from a structured filter, never from an SQL string. A generic audit trigger reads `current_setting('mulligan.action_id', true)` (set with `SET LOCAL` per action txn) and writes old/new `jsonb` rows, including rows removed by `ON DELETE CASCADE`. A script runs each tool, then replays the inverse. Undo must put parent rows back before their children: a cascade deletes the parent first, so plain reverse audit order would re-insert children first and break the FK. Either sort re-inserts by FK dependency (parents first) or make FKs `DEFERRABLE` and run undo under `SET CONSTRAINTS ALL DEFERRED`. Pick one here and record it. `pg_drop_table` is a soft drop: `ALTER TABLE ... SET SCHEMA mulligan_trash` plus a rename, and undo moves the table back. Run on TimescaleDB-compatible Postgres. | A | The table checksum after undo equals the checksum before, including a parent delete that cascaded into 2+ child tables. A dropped table comes back with its data, PK, indexes and the foreign keys that point at it, and the agent's read-only role can't see `mulligan_trash`. A runaway `pg_query` is killed by `statement_timeout`. |
 | 0.4 | **Notion restore.** Capture a page's properties and full block tree, let a "rogue" edit rewrite and trash it, then restore it. Then repeat, but hand-edit one block the rogue edit wrote before restoring, and spot it with a hash of each property and block the rogue edit wrote. Check which API version is current and its trash field (`archived` vs `in_trash`). | A | The restored page's normalized content hash matches the original. On the repeat, the hand-edited block is kept and flagged, and everything else matches. Note any block types the API can't recreate. |
 | 0.5 | **Fetch agent in ASI:One.** A `uagents` agent with `mailbox=True`, `publish_agent_details=True` and the chat protocol (`chat_protocol_spec`, `ChatMessage`, `ChatAcknowledgement`), connected through the Inspector. | A | The agent is findable on Agentverse, and "Chat with Agent" in ASI:One gets a reply. |
@@ -143,7 +143,15 @@ Steps run newest action first. `expected` is the checksum of the pre-session sta
 | GET | `/events` | SSE stream | UI |
 | POST | `/demo/reset` | dev only, behind `MULLIGAN_DEMO=1` | demo, UI |
 
-Auth: the UI uses a dashboard token. Service-to-service calls (Photon, Fetch) use `X-Mulligan-Service-Token`. MCP agents use a per-agent bearer token that maps to `agent`. The demo's replay client has its own token, so its sessions are marked `mode: replay`.
+Auth: the UI uses a dashboard token. Service-to-service calls (Photon, Fetch) use `X-Mulligan-Service-Token`. MCP agents use a per-agent bearer token that maps to `agent`. The demo's replay client has its own token, so its sessions are marked `mode: replay`. **Every route needs a token**, enforced by one FastAPI dependency applied to the whole app. The only exception is `GET /healthz`. `/api/demo/reset` needs `MULLIGAN_DEMO=1` *and* the dashboard token.
+
+**Ports (two servers in one gateway process, sharing the action log and event bus):**
+| Port | Bind | Serves | Reached by |
+|---|---|---|---|
+| `8000` (`MULLIGAN_API_PORT`) | `127.0.0.1` only | REST `/api/*`, SSE `/api/events`, `/healthz` | dashboard, Photon service, Fetch agent, demo scripts (all on the laptop) |
+| `8001` (`MULLIGAN_MCP_PORT`) | `0.0.0.0` | MCP `/mcp` only (Streamable HTTP) | Claude Code locally, and Devin through the cloudflared quick tunnel |
+
+Under `docker compose`, the bind column means the host port mapping (`"127.0.0.1:8000:8000"` and `"8001:8001"`). Inside the container both servers listen on `0.0.0.0` so the dashboard and Photon containers can reach the gateway over the compose network. The tunnel points at `:8001` only, so the REST API is never public. This is free and needs no Cloudflare account or domain. If the changing quick-tunnel URL becomes a problem, the free upgrade is ngrok's single static domain, still pointed at `:8001` only.
 
 **Photon service API (Stream B serves it, the gateway calls it):** `POST /notify/approval {action_id, code, summary, to}`, `POST /notify/summary {rewind_job_id, text, to}`. Replies get parsed and forwarded to `/api/approvals/{id}/decision`.
 
@@ -179,7 +187,7 @@ The folder layout already exists (see "Repo structure" above). Phase 1 adds `pyp
 ```
 GOAL: An agent connected over MCP changes prod-db through the typed Postgres tools, every action is logged with before/after and field hashes, and POST /api/rewind for that session restores the DB with a matching checksum.
 ```
-- Gateway: FastAPI with FastMCP mounted (Streamable HTTP), per-agent bearer auth, session tracking, action log in TimescaleDB (`actions` hypertable plus `events`), SSE `/api/events`.
+- Gateway: two uvicorn servers in one process: FastMCP (Streamable HTTP) on `:8001`, REST and SSE on `127.0.0.1:8000`. Token auth on every route, per-agent bearer auth on MCP, session tracking, action log in TimescaleDB (`actions` hypertable plus `events`), SSE `/api/events`.
 - Postgres adapter, building on the 0.3 spike: the typed tools build parameterized SQL, one txn per action with `SET LOCAL mulligan.action_id`, audit-trigger capture, a hash for each (row, column) the action changed, the soft drop into `mulligan_trash`, and the inverse built from the audit rows (parents re-inserted before children). `pg_query` runs read-only with `statement_timeout` and a row cap.
 - Undo orchestrator v1: one system, newest action first, dry-run plan, then execute and verify the checksum.
 - Policy table: an entry in `contracts/reversibility_policy.yaml` for every registered tool, checked at startup. Ship the hold-everything `Classifier` stub.
@@ -251,10 +259,14 @@ GOAL: A Veri-trained classifier is served and gates upstream tools with >=90% ac
 
 ---
 
-## Phase 5 — Hardening, observability and deploy (parallel)
+## Phase 5 — Hardening, observability and demo-laptop setup (parallel)
 
-**Stream A:** Run the gateway and both DBs on the demo laptop, with a cloudflared tunnel giving the gateway a public HTTPS URL for Devin. A quick tunnel's URL changes whenever it restarts, so keep it running and update Devin's MCP settings if it does. Set up Sentry Logs and AI agent monitoring, backups of the action log, and a load check (200 actions in the log, rewind under 30 s). Add a Claude Code `PreToolUse` hook config (docs check against code.claude.com/docs/en/hooks) for demo laptops that blocks direct DB, `gh` and curl calls, so the only route is Mulligan.
-**Stream B:** Deploy the dashboard and Photon service. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, the Veri eval and the Photon flow).
+```
+GOAL: `docker compose up` on the demo laptop runs the whole stack (both DBs, gateway, Photon service, dashboard) with no paid hosting. Only the MCP port is reachable through the tunnel, and every route rejects a missing or wrong token.
+```
+
+**Stream A:** Run the gateway and both DBs on the demo laptop under `docker compose`. A free cloudflared quick tunnel points at the MCP port (`:8001`) only, giving Devin a public HTTPS URL. A quick tunnel's URL changes whenever it restarts, so keep it running and update Devin's MCP settings if it does. Add a check script that hits the tunnel URL and confirms `/api/*` isn't reachable there, and that every local route returns 401 without a token. Set up Sentry Logs and AI agent monitoring, backups of the action log, and a load check (200 actions in the log, rewind under 30 s). Add a Claude Code `PreToolUse` hook config (docs check against code.claude.com/docs/en/hooks) for demo laptops that blocks direct DB, `gh` and curl calls, so the only route is Mulligan.
+**Stream B:** Add the dashboard (built with Vite and served from its compose service) and the Photon service to `docker compose`, both talking to the gateway on `127.0.0.1:8000`. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, the Veri eval and the Photon flow).
 
 **STOP — approval gate.**
 
@@ -278,4 +290,3 @@ GOAL: No known correctness bug in the undo path, no secret reachable by an agent
 3. Email sandbox: Mailpit (local only) or a real sandbox provider such as Resend test mode.
 4. The iMessage line: Photon cloud line or local provider on a team Mac.
 5. Which model and API key drive the live rogue agent.
-6. Whether to rename the GitHub repo from `rewind` to `mulligan` (GitHub redirects the old URL).
