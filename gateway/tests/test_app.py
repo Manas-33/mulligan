@@ -27,9 +27,9 @@ def test_api_rejects_missing_or_wrong_token() -> None:
 
 def test_api_accepts_either_token() -> None:
     c = client()
-    # No routes yet, so an authenticated request falls through to 404 instead of 401.
+    # An unknown path behind a good token is a 404, not a 401.
     for headers in ({"Authorization": "Bearer dash-tok"}, {"X-Mulligan-Service-Token": "svc-tok"}):
-        assert c.get("/api/sessions", headers=headers).status_code == 404
+        assert c.get("/api/nope", headers=headers).status_code == 404
 
 
 def test_unconfigured_tokens_never_match() -> None:

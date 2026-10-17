@@ -37,6 +37,7 @@ from mulligan.models import (
     Agent,
     ApprovalDecisionRequest,
     EventName,
+    FieldChange,
     HoldKind,
     Inverse,
     Reversibility,
@@ -135,6 +136,15 @@ class Adapter(ABC):
     @abstractmethod
     async def checksum(self) -> str | None:
         """Hash of the system's canonical, sorted state, or ``None`` if it has none."""
+
+    async def expected_checksum(self, pre: str, kept: list[FieldChange]) -> str:
+        """The checksum a rewind should land on: ``pre`` (taken just before the oldest action in
+        scope) with the kept human edits applied on top.
+
+        The default fits adapters whose rewinds never keep anything. Adapters that can keep human
+        edits use a checksum they can adjust per element (e.g. a sum of per-row hashes).
+        """
+        return pre
 
 
 class Policy(ABC):
