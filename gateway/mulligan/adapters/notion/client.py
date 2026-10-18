@@ -35,6 +35,11 @@ class NotionError(Exception):
         return self.status == 404 or self.code == "object_not_found"
 
 
+class NotionWriteUnknown(NotionError):
+    """A non-idempotent request that went out with no clear answer (the connection failed, or
+    Notion answered 5xx), so it may have run. Never resent."""
+
+
 def normalize_id(value: str) -> str:
     """A page or block id, or a Notion URL ending in one, as the dashed UUID the API returns."""
     runs = re.findall(r"[0-9a-fA-F]{32}", value.replace("-", ""))
@@ -87,8 +92,11 @@ class NotionClient:
             self.requests += 1
             try:
                 r = await self.http.request(method, path, json=body)
-            except (httpx.TimeoutException, httpx.TransportError):
-                if not idempotent or attempt == ATTEMPTS:
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if not idempotent:
+                    message = f"{type(exc).__name__} talking to Notion"
+                    raise NotionWriteUnknown(0, "no_response", message) from exc
+                if attempt == ATTEMPTS:
                     raise
                 await asyncio.sleep(delay)
                 delay *= 2
@@ -106,7 +114,10 @@ class NotionClient:
                 err = r.json()
             except ValueError:
                 err = {}
-            raise NotionError(
+            error = NotionError
+            if not idempotent and r.status_code >= 500 and r.status_code not in REFUSED:
+                error = NotionWriteUnknown
+            raise error(
                 r.status_code, str(err.get("code", "error")), str(err.get("message", r.text[:200]))
             )
         raise AssertionError("unreachable")

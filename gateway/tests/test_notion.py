@@ -9,7 +9,12 @@ import httpx
 import pytest
 
 from mulligan.adapters.notion.adapter import NotionAdapter, canonical_hash
-from mulligan.adapters.notion.client import NotionClient, NotionError, normalize_id
+from mulligan.adapters.notion.client import (
+    NotionClient,
+    NotionError,
+    NotionWriteUnknown,
+    normalize_id,
+)
 from mulligan.interfaces import ToolCall, ToolResult
 from mulligan.models import (
     Action,
@@ -406,13 +411,20 @@ async def test_client_retries_rate_limits_and_read_timeouts() -> None:
     assert calls == ["GET", "GET", "GET"]
 
 
-async def test_client_never_resends_an_append_that_may_have_run() -> None:
+@pytest.mark.parametrize("answer", ["timeout", 502])
+async def test_client_never_resends_an_append_that_may_have_run(answer: str | int) -> None:
+    calls: list[str] = []
+
     def handle(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("slow", request=request)
+        calls.append(request.method)
+        if answer == "timeout":
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(502, json={"code": "bad_gateway", "message": "upstream"})
 
     client = NotionClient("t", transport=httpx.MockTransport(handle), min_interval_s=0)
-    with pytest.raises(httpx.ReadTimeout):
+    with pytest.raises(NotionWriteUnknown):
         await client.append("p", [{"type": "paragraph", "paragraph": {"rich_text": []}}])
+    assert calls == ["PATCH"]
 
 
 async def test_client_raises_notion_errors() -> None:

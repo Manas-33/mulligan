@@ -2,7 +2,9 @@
 
 Undo keeps every block id: it untrashes the page, puts properties and block content back with
 updates, and deletes the blocks the agent appended. A property or block whose hash no longer
-matches what the agent left was changed by someone else since, so it is kept and flagged.
+matches what the agent left was changed by someone else since, so it is kept and flagged. An
+append that got no answer has no block ids: undo looks for blocks that weren't on the page before
+and hold what was sent.
 """
 
 from __future__ import annotations
@@ -16,7 +18,12 @@ from typing import Any, ClassVar
 
 import httpx
 
-from mulligan.adapters.notion.client import NotionClient, NotionError, normalize_id
+from mulligan.adapters.notion.client import (
+    NotionClient,
+    NotionError,
+    NotionWriteUnknown,
+    normalize_id,
+)
 from mulligan.adapters.notion.normalize import (
     ABSENT,
     OWN_PAGES,
@@ -38,7 +45,7 @@ from mulligan.adapters.notion.normalize import (
     text_update,
     title_of,
 )
-from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult
+from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult, WriteUncertain
 from mulligan.models import (
     Action,
     FieldChange,
@@ -78,6 +85,23 @@ def before_hash(field: dict[str, Any]) -> str:
     if field["kind"] == "trash":
         return trash_hash(field["before"])
     return form_hash(field["before"])
+
+
+def match_hash(form: dict[str, Any]) -> str:
+    """What an appended block is recognized by when its id is unknown: its type and text. Notion
+    adds defaults (annotations, color) to what was sent, so the whole form wouldn't match."""
+    return sha([form["type"], form_text(form)])
+
+
+def appended_field(page_id: str, blk: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "key": f"notion:{page_id}/blocks/{blk['id']}",
+        "kind": "appended",
+        "block_id": blk["id"],
+        "before": None,
+        "before_value": None,
+        "agent_value": form_text(block_form(blk)),
+    }
 
 
 def record(snap: dict[str, Any]) -> dict[str, Any]:
@@ -321,20 +345,35 @@ class NotionAdapter(Adapter):
                     }
                 )
                 hashes[key] = block_hash(after)
-            appended = await self.client.append(page_id, appends) if appends else []
-            for blk in appended:
-                key = f"notion:{page_id}/blocks/{blk['id']}"
+            try:
+                appended = await self.client.append(page_id, appends) if appends else []
+            except NotionWriteUnknown as exc:
+                # The blocks may be there. Keep the earlier writes too, so the page holds all or
+                # all but the append, and a rewind finds the blocks and undoes the lot.
+                sent = [match_hash(block_form(p)) for p in appends]
+                key = f"notion:{page_id}/appended"
                 fields.append(
                     {
                         "key": key,
-                        "kind": "appended",
-                        "block_id": blk["id"],
+                        "kind": "append_lookup",
+                        "before_ids": [n["id"] for n in snap["blocks"]],
+                        "sent": sent,
                         "before": None,
                         "before_value": None,
-                        "agent_value": form_text(block_form(blk)),
+                        "agent_value": [form_text(block_form(p)) for p in appends],
                     }
                 )
-                hashes[key] = block_hash(blk)
+                hashes[key] = sha(sent)
+                raise WriteUncertain(
+                    str(exc),
+                    before_ref=before.ref,
+                    inverse=self._inverse(call, before, fields),
+                    after_hashes=hashes,
+                ) from exc
+            for blk in appended:
+                field = appended_field(page_id, blk)
+                fields.append(field)
+                hashes[field["key"]] = block_hash(blk)
         except Errors as exc:
             # The call fails as a whole, and a failed action has no inverse: undo its writes now.
             await self._roll_back(page_id, fields)
@@ -409,6 +448,9 @@ class NotionAdapter(Adapter):
         fields = before.state.get("fields")
         if not fields:
             return None
+        return self._inverse(call, before, fields)
+
+    def _inverse(self, call: ToolCall, before: Capture, fields: list[dict[str, Any]]) -> Inverse:
         page_id = before.state["page_id"]
         payload: dict[str, Any] = {"page_id": page_id, "fields": fields}
         # The whole page as it was before the session's first write to it.
@@ -458,10 +500,11 @@ class NotionAdapter(Adapter):
         fields: list[dict[str, Any]] = inverse.payload["fields"]
         changes: list[FieldChange] = []
         done: Counter[str] = Counter()
+        agent_hashes = dict(action.after_hashes)
 
         def decide(field: dict[str, Any], current: str, shown: Any) -> bool:
             """Record the field's outcome. True if it still holds what the agent left."""
-            agent = action.after_hashes.get(field["key"])
+            agent = agent_hashes.get(field["key"])
             ok = current in (agent, before_hash(field))
             changes.append(
                 FieldChange(
@@ -491,6 +534,13 @@ class NotionAdapter(Adapter):
                     " the trash and rewind again."
                 )
                 return self._step(action, changes, StepResult.failed, detail)
+            for f in [f for f in rest if f["kind"] == "append_lookup"]:
+                rest.remove(f)
+                # A trashed page's children can't be listed; only a dry run gets here with one.
+                for new in [] if in_trash else await self._find_appended(page_id, f):
+                    field = appended_field(page_id, new)
+                    agent_hashes[field["key"]] = block_hash(new)  # it holds what was sent
+                    rest.append(field)
 
             restore: dict[str, Any] = {}
             for f in (f for f in rest if f["kind"] == "property"):
@@ -530,6 +580,19 @@ class NotionAdapter(Adapter):
             return self._step(action, changes, StepResult.pending, detail)
         result = StepResult.kept_human_edit if kept else StepResult.restored
         return self._step(action, changes, result, detail)
+
+    async def _find_appended(self, page_id: str, f: dict[str, Any]) -> list[dict[str, Any]]:
+        """The blocks an append that got no answer left, if it landed: blocks under the page
+        that weren't there before, matching what was sent, in order."""
+        known = set(f["before_ids"])
+        sent: list[str] = f["sent"]
+        found: list[dict[str, Any]] = []
+        for blk in await self.client.children(page_id):
+            if len(found) == len(sent):
+                break
+            if blk["id"] not in known and match_hash(block_form(blk)) == sent[len(found)]:
+                found.append(blk)
+        return found
 
     # --- checksums ----------------------------------------------------------------------------
 
@@ -574,6 +637,12 @@ class NotionAdapter(Adapter):
                 current = trash_hash(in_trash)
             elif f["kind"] == "property":
                 current = form_hash(prop_form(page.get("properties", {}).get(f["name"])))
+            elif f["kind"] == "append_lookup":
+                # Back to before means none of the blocks it may have added are left.
+                found = [] if in_trash else await self._find_appended(page_id, f)
+                actual.append([key, sha([b["id"] for b in found]) if found else ABSENT])
+                expected.append([key, ABSENT])
+                continue
             else:
                 current = block_hash(await self._block(f["block_id"]), in_trash)
             actual.append([key, current])
