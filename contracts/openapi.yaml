@@ -134,14 +134,17 @@ components:
         reversibility: { label: reversible, source: policy, reason: null }
         summary: Deleted 412 rows from customers (cascaded 1,203 orders, 2,611 order_items)
         error: null
-        before_ref: "audit:act_01M561QDJRQ23HY0VT7QKFVHHZ"
-        after_ref: "audit:act_01M561QDJRQ23HY0VT7QKFVHHZ"
+        before_ref: "pg-audit:act_01M561QDJRQ23HY0VT7QKFVHHZ"
+        after_ref: "pg-audit:act_01M561QDJRQ23HY0VT7QKFVHHZ"
         after_hashes:
-          "postgres:public.customers/7": 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
-          "postgres:public.customers/19": 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+          "postgres:customers/7": 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+          "postgres:customers/19": 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
         inverse:
-          kind: postgres.reinsert_rows
-          payload: { audit_action_id: act_01M561QDJRQ23HY0VT7QKFVHHZ, table_order: [customers, orders, order_items] }
+          kind: postgres.audit_log
+          payload:
+            action_id: act_01M561QDJRQ23HY0VT7QKFVHHZ
+            audit_ids: [1041, 5267]
+            tables: [public.customers, public.order_items, public.orders]
         approval: null
         hold: null
         explanation: The agent deleted every customer with no order in the last year, which also removed their orders and line items.
@@ -166,13 +169,13 @@ components:
         reversibility: { label: reversible, source: policy, reason: null }
         summary: Updated 1 row in products (price)
         error: null
-        before_ref: "audit:act_01M561QMDGVQT2P6RJ36HMDZ5T"
-        after_ref: "audit:act_01M561QMDGVQT2P6RJ36HMDZ5T"
+        before_ref: "pg-audit:act_01M561QMDGVQT2P6RJ36HMDZ5T"
+        after_ref: "pg-audit:act_01M561QMDGVQT2P6RJ36HMDZ5T"
         after_hashes:
-          "postgres:public.products/42/price": 5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
+          "postgres:products/42/price": 5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
         inverse:
-          kind: postgres.restore_columns
-          payload: { audit_action_id: act_01M561QMDGVQT2P6RJ36HMDZ5T }
+          kind: postgres.audit_log
+          payload: { action_id: act_01M561QMDGVQT2P6RJ36HMDZ5T, audit_ids: [5268, 5268], tables: [public.products] }
         approval: null
         hold: null
         explanation: null
@@ -194,13 +197,19 @@ components:
         reversibility: { label: reversible, source: policy, reason: null }
         summary: Dropped table legacy_pricing (moved to trash; 1 foreign key still points at it)
         error: null
-        before_ref: "trash:legacy_pricing"
-        after_ref: "trash:legacy_pricing"
+        before_ref: "pg-trash:act_01m561qv889bfcn8bx9g1ve36w__legacy_pricing"
+        after_ref: "pg-trash:act_01m561qv889bfcn8bx9g1ve36w__legacy_pricing"
         after_hashes:
-          "postgres:public.legacy_pricing": 2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3
+          "postgres:legacy_pricing": 2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3
         inverse:
           kind: postgres.undrop_table
-          payload: { schema: public, table: legacy_pricing }
+          payload:
+            schema: public
+            name: legacy_pricing
+            trash_schema: mulligan_trash
+            trash_name: act_01m561qv889bfcn8bx9g1ve36w__legacy_pricing
+            renamed: [{ kind: index, name: legacy_pricing_pkey, trash_name: act_01m561qv889bfcn8bx9g1ve36w_i1 }]
+            inbound_fks: [{ child: price_overrides, conname: price_overrides_legacy_pricing_id_fkey }]
         approval: null
         hold: null
         explanation: null
@@ -344,7 +353,7 @@ components:
             result: pending
             kept_fields: []
             changes:
-              - field: "postgres:public.legacy_pricing"
+              - field: "postgres:legacy_pricing"
                 before: { rows: 120 }
                 agent_value: null
                 current: null
@@ -355,9 +364,9 @@ components:
             system: postgres
             tool: pg_update_rows
             result: pending
-            kept_fields: ["postgres:public.products/42/price"]
+            kept_fields: ["postgres:products/42/price"]
             changes:
-              - field: "postgres:public.products/42/price"
+              - field: "postgres:products/42/price"
                 before: 49
                 agent_value: 0
                 current: 45
@@ -370,7 +379,7 @@ components:
             result: pending
             kept_fields: []
             changes:
-              - field: "postgres:public.customers/7"
+              - field: "postgres:customers/7"
                 before: { id: 7, name: Ada Park, email: ada@example.com, last_order_at: "2025-03-02" }
                 agent_value: null
                 current: null
@@ -427,9 +436,9 @@ components:
             system: postgres
             tool: pg_update_rows
             result: kept_human_edit
-            kept_fields: ["postgres:public.products/42/price"]
+            kept_fields: ["postgres:products/42/price"]
             changes:
-              - field: "postgres:public.products/42/price"
+              - field: "postgres:products/42/price"
                 before: 49
                 agent_value: 0
                 current: 45

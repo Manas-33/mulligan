@@ -2,6 +2,8 @@
 
 What agents see when they connect to Mulligan at `/mcp` on port 8001 (Streamable HTTP, `Authorization: Bearer <agent token>`). Each token maps to one `Agent` (`MULLIGAN_AGENT_TOKENS`), so the agent can't choose who it is. Agents never get a credential for a real system, and never see the REST API.
 
+**Sessions.** A `Session` is one `Mcp-Session-Id`. Clients that open on the sessionless 2026-07-28 protocol are asked to use the `initialize` handshake instead, so they get a session id; a client that can't gets one session per agent token, which ends after 30 idle minutes.
+
 Every built-in tool has an entry in `reversibility_policy.yaml`. The gateway won't start if one is missing.
 
 ## Common rules
@@ -13,7 +15,10 @@ Every built-in tool has an entry in `reversibility_policy.yaml`. The gateway won
 
 ## Postgres
 
-Write tools take a table, a structured filter and values, never SQL, so Mulligan knows which rows a call touches before it runs it. Identifiers are checked against the catalog and quoted; values are bound as parameters. Each call runs in one transaction with `SET LOCAL mulligan.action_id`, and the audit trigger records the old and new row of every row it changes, including rows removed by `ON DELETE CASCADE`.
+Write tools take a table, a structured filter and values, never SQL, so Mulligan knows which rows a call touches before it runs it. Identifiers are checked against the catalog and quoted; values go in as one JSON parameter that Postgres converts to the column types (`jsonb_populate_record`). Each call runs in one transaction with `mulligan.action_id` set locally, and the audit trigger (`mulligan_audit.audit_log`) records the old and new row of every row it changes, including rows changed by `ON DELETE CASCADE` or `SET NULL`.
+
+- A table needs a primary key, and a write is refused if it or any table an FK action can reach from it has no audit trigger, since those changes couldn't be undone.
+- Agents can't set `GENERATED ALWAYS` columns.
 
 `Filter` (all conditions are ANDed):
 
@@ -37,16 +42,17 @@ An empty filter is rejected unless the call also sets `"all": true`.
 
 | Tool | Input | Result (`structuredContent`) | Label |
 |---|---|---|---|
-| `pg_query` | `{sql: string, params?: any[], max_rows?: 1..1000 = 200}` | `{columns: string[], rows: any[][], row_count, truncated}` | read_only |
+| `pg_query` | `{sql: string (one SELECT, literals inline), max_rows?: 1..1000 = 200}` | `{columns: string[], rows: any[][], row_count, truncated}` | read_only |
 | `pg_insert_rows` | `{table, rows: object[] (1..1000)}` | `{inserted, primary_keys: any[][]}` | reversible |
 | `pg_update_rows` | `{table, filter: Filter, all?: bool, values: object (≥1 column)}` | `{updated}` | reversible |
-| `pg_delete_rows` | `{table, filter: Filter, all?: bool}` | `{deleted, cascaded: {"<table>": count}}` | reversible |
-| `pg_drop_table` | `{table}` | `{dropped: "<schema.table>", referencing_foreign_keys: [{table, constraint, columns}]}` | reversible |
+| `pg_delete_rows` | `{table, filter: Filter, all?: bool}` | `{deleted, cascaded: {"<table>": count}}` (rows changed by FK actions) | reversible |
+| `pg_drop_table` | `{table}` | `{dropped: "<schema.table>", referencing_foreign_keys: [{table, constraint}], dependent_views: string[]}` | reversible |
 
 `table` is `name` or `schema.name`; the schema defaults to `public`.
 
-- **`pg_query` is read-only three times over.** It connects as a separate login role with only `SELECT` grants (`PROD_DB_READONLY_URL`), never `SET ROLE`, which the query itself could undo. It runs in a `READ ONLY` transaction with `SET LOCAL statement_timeout` (`PG_QUERY_TIMEOUT_MS`, default 5000) and accepts exactly one statement. Rows past `max_rows` are dropped and `truncated` is true. The role can't see `mulligan_trash` or `mulligan_audit`.
-- **Soft drop.** `pg_drop_table` moves the table into the `mulligan_trash` schema, which agents can't see, and renames it so the name stays unique and under Postgres's 63-byte limit. Undo moves it back under its old name. Trashed tables are purged only after the undo window closes.
+- **`pg_query` is read-only three times over.** It connects as its own login role, `mulligan_ro`, with only `SELECT` grants (`PROD_DB_READONLY_URL`), never `SET ROLE`, which the query itself could undo. It runs in a `READ ONLY` transaction with a local `statement_timeout` (`PG_QUERY_TIMEOUT_MS`, default 5000), through a server-side cursor, which allows exactly one statement and fetches at most `max_rows + 1` rows. Rows past `max_rows` are dropped and `truncated` is true. The role can't see `mulligan_trash` or `mulligan_audit`.
+- **Soft drop.** `pg_drop_table` renames the table to `<action_id>__<table>` (the action id first, cut to 63 bytes, since Postgres silently truncates longer names), renames its indexes and owned sequences to `<action_id>_i<n>` / `_s<n>` so a second drop of the same name can't clash, and moves it into the `mulligan_trash` schema, which agents can't see. Undo moves everything back under the old names. Trashed tables are purged only after the undo window closes. The gateway's role (`mulligan_gw`) owns the app tables, which `SET SCHEMA` requires.
+- **Dependent views** keep working against a trashed table, so the drop revokes `mulligan_ro`'s `SELECT` on them and undo grants it back. The result lists them.
 - **Known difference from a real `DROP`:** a move keeps every foreign key that points at the table, and so does a rename. A real `DROP` without `CASCADE` would fail on those FKs, and `DROP ... CASCADE` would remove them. Mulligan does neither: the drop always succeeds, referencing tables keep working against the trashed table, and undo needs no FK repair. The result lists the FKs that still reference the table, and the action log records them. This is deliberate. Don't "fix" it by dropping FKs.
 - **Undo order inside one action.** Audit rows are reverted newest first, except that re-inserted rows go parents first, sorted by FK dependency from `pg_constraint`. FKs are never made `DEFERRABLE`, because that would change the customer's schema. Re-inserting into a `GENERATED ALWAYS AS IDENTITY` column uses `OVERRIDING SYSTEM VALUE`.
 - **Conflicts.** A column a human changed after the agent is kept and flagged, and the row's other columns are still restored. A deleted row whose primary key a human reused, or a dropped table whose name a human reused, is a conflict: that step is skipped and flagged.
@@ -76,6 +82,7 @@ All tools act on `GITHUB_ORG/GITHUB_REPO` only.
 - Property values are simplified JSON: title and rich text as a string, number, select as a string, multi-select as a string array, checkbox, date as an ISO string, url, email and phone as strings.
 - `append_blocks` types: `paragraph`, `heading_1`, `heading_2`, `heading_3`, `bulleted_list_item`, `numbered_list_item`, `to_do`, `quote`, `callout`, `code`. `block_updates` replaces a block's plain text and keeps its type.
 - Undo restores properties and block text, deletes appended blocks and untrashes the page. The block tree is captured before the first write.
+- The Notion API can't take a workspace-level page out of the trash, so pages Mulligan protects live under a parent page shared with the integration.
 - **Conflicts.** The adapter hashes each property and block the agent wrote. A property or block whose hash changed is kept and flagged, and the rest of the page is restored.
 
 ## Held channels (Stream B's `holds/`)
@@ -112,4 +119,4 @@ MCP servers placed behind Mulligan are listed in `UPSTREAM_MCP_SERVERS` (`name=u
 - `github:issues/<number>/<field>`, `github:comments/<id>`, `github:files/<path>`
 - `notion:<page_id>/properties/<name>`, `notion:<page_id>/blocks/<block_id>`, `notion:<page_id>` (trash state)
 
-Each adapter hashes a canonical form of the value (documented in `docs/SDK_NOTES.md` under its spike), so the same value always gives the same hash.
+Each adapter hashes a canonical form of the value, so the same value always gives the same hash. Postgres hashes `mulligan_audit.field_hash(mulligan_audit.canon_row(row) -> column)` in SQL (timestamps in UTC, shortest round-trip floats, ISO intervals, hex bytea); an INSERT hashes every non-generated column, an UPDATE the columns it changed, and a DELETE the whole row as absent.

@@ -202,7 +202,7 @@ export interface Reversibility {
  */
 export interface Inverse {
   /**
-   * <adapter>.<operation>, e.g. postgres.reinsert_rows, postgres.restore_columns, postgres.delete_rows, postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_blocks, notion.restore_properties, notion.untrash_page, email.cancel_outbox, payments.cancel_authorization, none.
+   * <adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox, payments.cancel_authorization, none.
    */
   kind: string;
   payload: {
@@ -285,7 +285,7 @@ export interface Action {
    */
   error: string | null;
   /**
-   * Opaque pointer to the captured before-state, owned by the adapter.
+   * Opaque pointer to the captured before-state, owned by the adapter, e.g. pg-audit:<action_id> or pg-trash:<trash table>.
    */
   before_ref: string | null;
   /**
@@ -293,7 +293,7 @@ export interface Action {
    */
   after_ref: string | null;
   /**
-   * sha256 of every field the action changed, keyed by field path. A rewind re-reads each one and restores it only if the current hash still matches; otherwise a human changed it and it is kept. Field path format: <system>:<resource path>[/<field>]. Examples: postgres:public.products/42/price (one column of one row), postgres:public.customers/7 (a whole row the action inserted or deleted), postgres:public.legacy_pricing (a dropped table), github:issues/17/state, github:files/docs/pricing.md, notion:<page_id>/properties/Price, notion:<page_id>/blocks/<block_id>. Composite primary keys join their values with a comma; '/', ',' and '%' inside a value are percent-encoded.
+   * sha256 (lowercase hex) of the value the action left in every field it changed, keyed by field path. A rewind re-hashes each field and restores it only if the hash still matches; otherwise a human changed it and it is kept. An absent row or field hashes as sha256('') and a SQL NULL as sha256('null'). Field path format: <system>:<resource path>[/<field>]. Postgres: postgres:products/42/price (one column of one row), postgres:customers/7 (a whole row the action inserted or deleted), postgres:legacy_pricing (a dropped table); a table outside public is written schema.table. GitHub: github:issues/17/state, github:comments/<id>, github:files/<path>. Notion: notion:<page_id>/properties/<name>, notion:<page_id>/blocks/<block_id>, notion:<page_id> (trash state). Composite primary keys join their values with a comma; '%', '/' and ',' inside a segment are percent-encoded.
    */
   after_hashes: {
     [k: string]: string;
@@ -311,7 +311,7 @@ export interface Action {
   reverted_at: string | null;
 }
 /**
- * One agent's MCP session (one Mcp-Session-Id).
+ * One agent's MCP session: one Mcp-Session-Id, or, for a client on the sessionless MCP protocol, one per agent token until it has been idle for 30 minutes.
  *
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "Session".
@@ -349,7 +349,7 @@ export interface RewindScope {
  */
 export interface FieldChange {
   /**
-   * <system>:<resource path>[/<field>]. Examples: postgres:public.products/42/price (one column of one row), postgres:public.customers/7 (a whole row the action inserted or deleted), postgres:public.legacy_pricing (a dropped table), github:issues/17/state, github:files/docs/pricing.md, notion:<page_id>/properties/Price, notion:<page_id>/blocks/<block_id>. Composite primary keys join their values with a comma; '/', ',' and '%' inside a value are percent-encoded.
+   * A field path (see Action.after_hashes).
    */
   field: string;
   /**
