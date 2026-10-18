@@ -13,7 +13,9 @@ ARG SENTRY_DSN_DASHBOARD
 ARG SENTRY_ENVIRONMENT=dev
 ENV VITE_MULLIGAN_API_URL=$VITE_MULLIGAN_API_URL VITE_MULLIGAN_DASHBOARD_TOKEN=$VITE_MULLIGAN_DASHBOARD_TOKEN \
     SENTRY_DSN_DASHBOARD=$SENTRY_DSN_DASHBOARD SENTRY_ENVIRONMENT=$SENTRY_ENVIRONMENT
-RUN npm run build
+RUN npm run build \
+  # vite preview bundles vite.config.ts into node_modules/.vite-temp at startup, as the node user.
+  && mkdir -p node_modules/.vite-temp && chown node:node node_modules/.vite-temp
 EXPOSE 5173
 USER node
 CMD ["npx", "vite", "preview", "--host", "0.0.0.0", "--port", "5173"]
