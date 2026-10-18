@@ -113,3 +113,25 @@ test("the loop polls the gateway and keeps going after an error", async () => {
   assert.deepEqual(lines, ["summary loop error: gateway down", "summary ddx0: sent"]);
   assert.equal(m.sent.length, 1);
 });
+
+test("loop errors reach onError once per failing streak", async () => {
+  const m = new FakeMessenger();
+  const g = new FakeGateway();
+  // down, down, down, up, down: two streaks, so two reports.
+  const script = ["down", "down", "down", "up", "down"];
+  let calls = 0;
+  const stop = new AbortController();
+  g.rewinds = async () => {
+    const step = script[calls++];
+    if (step === undefined) {
+      stop.abort();
+      return [];
+    }
+    if (step === "down") throw new Error("gateway down");
+    return [];
+  };
+  const reported: unknown[] = [];
+  await summaryLoop(g, m, TO, { intervalMs: 1, signal: stop.signal, log: () => {}, onError: (e) => reported.push(e) });
+  assert.equal(reported.length, 2);
+  assert.match(String(reported[0]), /gateway down/);
+});

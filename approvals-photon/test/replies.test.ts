@@ -77,3 +77,24 @@ test("loop: handles each new reply once and ignores ones from before startup", a
   assert.equal(logs.length, 1);
   assert.match(logs[0]!, /: approve$/);
 });
+
+test("loop: a failed decision goes to onError (once while it keeps failing)", async () => {
+  const m = new FakeMessenger();
+  const g = new FakeGateway([heldAction("4821")]);
+  g.failWith = new GatewayError(500, "boom");
+  m.inbox = [inbound("a", "YES 4821"), inbound("b", "YES 4821")];
+  const stop = new AbortController();
+  const reported: unknown[] = [];
+  const loop = replyLoop(m, g, {
+    intervalMs: 5,
+    signal: stop.signal,
+    log: () => {},
+    onError: (e) => reported.push(e),
+    now: () => new Date("2026-10-18T01:00:00.000Z"),
+  });
+  await new Promise((r) => setTimeout(r, 40));
+  stop.abort();
+  await loop;
+  assert.equal(reported.length, 1);
+  assert.ok(reported[0] instanceof GatewayError);
+});

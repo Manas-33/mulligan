@@ -6,6 +6,8 @@ import { parseReply } from "./parse.ts";
 import type { InboundText, Messenger } from "./photon.ts";
 
 export type ReplyLog = (line: string) => void;
+/** Where loop errors go besides the log (Sentry in main.ts). */
+export type OnError = (error: unknown) => void;
 
 /** Handle one inbound text. Returns what happened, for logs and tests. */
 export async function handleReply(msg: InboundText, messenger: Messenger, gateway: Gateway): Promise<string> {
@@ -54,15 +56,30 @@ export async function handleReply(msg: InboundText, messenger: Messenger, gatewa
   }
 }
 
+/** Pass on the first error of a failing streak (and any different error), not one per poll: a
+ * gateway that's down for an hour shouldn't become thousands of Sentry events. */
+export function streak(onError: OnError) {
+  let last: string | null = null;
+  return {
+    ok: () => void (last = null),
+    failed: (e: unknown) => {
+      const key = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      if (key !== last) onError(e);
+      last = key;
+    },
+  };
+}
+
 /** Poll for replies until `signal` aborts. Each message is handled once. */
 export async function replyLoop(
   messenger: Messenger,
   gateway: Gateway,
-  opts: { intervalMs?: number; signal?: AbortSignal; log?: ReplyLog; now?: () => Date } = {},
+  opts: { intervalMs?: number; signal?: AbortSignal; log?: ReplyLog; onError?: OnError; now?: () => Date } = {},
 ): Promise<void> {
-  const { intervalMs = 1000, signal, log = console.log, now = () => new Date() } = opts;
+  const { intervalMs = 1000, signal, log = console.log, onError = () => {}, now = () => new Date() } = opts;
   const seen = new Set<string>();
   let since = now().toISOString(); // replies sent before startup are not ours to decide
+  const report = streak(onError);
   while (!signal?.aborted) {
     try {
       for (const msg of await messenger.receivedSince(since)) {
@@ -71,8 +88,10 @@ export async function replyLoop(
         since = msg.createdAt > since ? msg.createdAt : since;
         log(`reply ${msg.id.slice(-6)}: ${await handleReply(msg, messenger, gateway)}`);
       }
+      report.ok();
     } catch (e) {
       log(`reply loop error: ${e instanceof Error ? e.message : String(e)}`);
+      report.failed(e);
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }

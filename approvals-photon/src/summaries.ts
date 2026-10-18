@@ -6,6 +6,7 @@
 import type { Gateway } from "./gateway.ts";
 import { deliver, summaryKey } from "./notify.ts";
 import type { Messenger } from "./photon.ts";
+import { type OnError, streak } from "./replies.ts";
 import type { RewindJob, System } from "./types.ts";
 
 const FINISHED = new Set<RewindJob["status"]>(["completed", "partial", "failed"]);
@@ -89,15 +90,18 @@ export async function summaryLoop(
   gateway: Gateway,
   messenger: Messenger,
   to: string,
-  opts: { intervalMs?: number; signal?: AbortSignal; log?: SummaryLog; now?: () => Date } = {},
+  opts: { intervalMs?: number; signal?: AbortSignal; log?: SummaryLog; onError?: OnError; now?: () => Date } = {},
 ): Promise<void> {
-  const { intervalMs = 2000, signal, log = console.log, now = () => new Date() } = opts;
+  const { intervalMs = 2000, signal, log = console.log, onError = () => {}, now = () => new Date() } = opts;
   const state = { since: now().toISOString(), done: new Set<string>() };
+  const report = streak(onError);
   while (!signal?.aborted) {
     try {
       for (const line of await sendFinished(await gateway.rewinds(20), messenger, to, state)) log(`summary ${line}`);
+      report.ok();
     } catch (e) {
       log(`summary loop error: ${e instanceof Error ? e.message : String(e)}`);
+      report.failed(e);
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }

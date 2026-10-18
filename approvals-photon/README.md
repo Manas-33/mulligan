@@ -13,4 +13,6 @@ make photon         # http://127.0.0.1:8100 (needs MULLIGAN_SERVICE_TOKEN, PHOTO
 make photon-check   # type-check + tests
 ```
 
+Errors go to Sentry when `SENTRY_DSN_PHOTON` is set (environment from `SENTRY_ENVIRONMENT`): failures in the reply loop, the summary loop and the notify routes, tagged `where: reply-loop | summary-loop | notify`. A loop that keeps failing (the gateway is down, say) reports once per streak, not once per poll. No message text or phone handles are attached. The startup log says whether Sentry is on.
+
 Uses Photon 2.0 through `@photon-ai/api` (not spectrum-ts). The approver must be on iMessage and must text the shared line once first; see `docs/SDK_NOTES.md` (spike 0.6). Shared types come from `contracts/generated/types.ts` via `src/types.ts`.
