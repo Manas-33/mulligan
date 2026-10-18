@@ -406,3 +406,48 @@ async def test_event_seq_keeps_counting_after_a_demo_reset(svc: Services) -> Non
     await svc.gateway.start_session(AGENT, SessionMode.live)
     after = await svc.bus.replay(0)
     assert first.id and after[0].root.seq > before[-1].root.seq
+
+
+async def test_a_rewind_during_an_approval_waits_and_undoes_the_call(
+    svc: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = svc.gateway.policy.entry("pg_update_rows")
+    assert entry is not None
+    svc.gateway.policy._entries["pg_update_rows"] = entry.model_copy(
+        update={"hold": "email_outbox"}
+    )
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 2}]
+    result = await svc.gateway.call_tool(
+        session, "pg_update_rows", {"filter": flt, "values": {"price": 1}}
+    )
+    action = await svc.store.get(result.structured_content["action_id"])
+    assert action is not None and action.approval is not None
+    gate = asyncio.Event()
+    run_held = svc.gateway.run_held
+
+    async def slow_run(action_id: str) -> Any:
+        await gate.wait()
+        return await run_held(action_id)
+
+    monkeypatch.setattr(svc.gateway, "run_held", slow_run)
+    approve = ApprovalDecisionRequest(
+        decision=ApprovalDecision.approve,
+        code=action.approval.code,
+        channel=ApprovalChannel.dashboard,
+        decided_by="dashboard",
+    )
+    deciding = asyncio.create_task(svc.hold_manager.on_decision(action.id, approve))
+    await asyncio.sleep(0.05)
+    job = await svc.rewinder.create(
+        RewindRequest(scope=RewindScope(session_id=session.id), dry_run=False)
+    )
+    await asyncio.sleep(0.05)
+    gate.set()
+    await deciding
+    await svc.rewinder.wait()
+    done = await svc.store.get_job(job.id)
+    assert done is not None and [s.result for s in done.steps] == [StepResult.restored]
+    assert fake(svc).rows[2]["price"] == 99
+    after = await svc.store.get(action.id)
+    assert after is not None and after.status is ActionStatus.reverted

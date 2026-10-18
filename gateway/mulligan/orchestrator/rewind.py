@@ -292,8 +292,12 @@ class Rewinder:
             if hold_manager is None:
                 return _step(current, StepResult.failed, "No hold manager."), current
             step = await hold_manager.cancel(current)
-            await self.store.drop_held_call(current.id)
-            return step, await self.store.get(current.id) or current
+            after = await self.store.get(current.id) or current
+            if not undoable(after) or after.status in (ActionStatus.held, ActionStatus.approved):
+                await self.store.drop_held_call(current.id)
+                return step, after
+            # Its approval was already running and it ran: undo it like any other call.
+            current = after
         if not undoable(current):
             return _step(current, StepResult.skipped, f"Action is {current.status.value}."), current
         if current.system is System.upstream:
