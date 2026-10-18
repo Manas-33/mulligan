@@ -161,7 +161,8 @@ async def test_cascaded_delete_drop_and_update_rewind_to_the_same_checksum(
     assert (
         await scalar(
             human,
-            "select count(*) from price_overrides po join legacy_pricing lp on lp.id = po.legacy_pricing_id",
+            "select count(*) from price_overrides po"
+            " join legacy_pricing lp on lp.id = po.legacy_pricing_id",
         )
         == 12
     )
