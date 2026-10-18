@@ -97,7 +97,9 @@ async def open_pg_pool(url: str, *, max_size: int = 5) -> AsyncConnectionPool:
 
 
 def _plural(n: int, noun: str) -> str:
-    return f"{n:,} {noun}" if n != 1 else f"1 {noun.rstrip('s')}"
+    if n == 1:
+        return f"1 row in {noun}" if not noun.endswith("s") else f"1 {noun[:-1]}"
+    return f"{n:,} {noun}"
 
 
 class PostgresAdapter(Adapter):
@@ -233,7 +235,8 @@ class PostgresAdapter(Adapter):
         fks = payload["inbound_fks"]
         summary = f"Dropped table {t.name}"
         if fks:
-            summary += f" ({_plural(len(fks), 'foreign keys')} still point at it)"
+            verb = "points" if len(fks) == 1 else "point"
+            summary += f" ({_plural(len(fks), 'foreign keys')} still {verb} at it)"
         return ToolResult(
             structured_content={
                 "dropped": t.qualname,
@@ -636,7 +639,8 @@ def _describe(
         elif restore_cols.get(a["id"]):
             counts["Restore"][name] += 1
     parts = [
-        f"{verb} " + ", ".join(f"{n:,} {t}" for t, n in c.items()) for verb, c in counts.items()
+        f"{verb} " + ", ".join(_plural(n, t) if n == 1 else f"{n:,} {t}" for t, n in c.items())
+        for verb, c in counts.items()
     ]
     if not parts:
         return "Nothing to restore."

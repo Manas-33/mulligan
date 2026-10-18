@@ -76,6 +76,7 @@ class Settings:
     bind_host: str = "127.0.0.1"
     api_port: int = 8000
     mcp_port: int = 8001
+    mcp_public_url: str = ""
     dashboard_token: str = ""
     service_token: str = ""
     agent_tokens: Mapping[str, AgentToken] = field(default_factory=dict)
@@ -106,6 +107,7 @@ class Settings:
             bind_host=get("MULLIGAN_BIND_HOST", "127.0.0.1"),
             api_port=int(get("MULLIGAN_API_PORT", "8000")),
             mcp_port=int(get("MULLIGAN_MCP_PORT", "8001")),
+            mcp_public_url=get("MULLIGAN_MCP_PUBLIC_URL"),
             dashboard_token=get("MULLIGAN_DASHBOARD_TOKEN"),
             service_token=get("MULLIGAN_SERVICE_TOKEN"),
             agent_tokens=parse_agent_tokens(get("MULLIGAN_AGENT_TOKENS")),

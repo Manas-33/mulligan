@@ -21,6 +21,7 @@ from mulligan.log.store import LogStore
 from mulligan.orchestrator.rewind import Rewinder
 from mulligan.policy import YamlPolicy
 from mulligan.settings import Settings
+from mulligan.status import StatusAdapter
 from mulligan.stubs import BasicHoldManager, HoldEverythingClassifier
 
 log = logging.getLogger("mulligan")
@@ -114,7 +115,7 @@ def assemble(
         bus=bus,
         policy=YamlPolicy.load(settings.policy_path),
         classifier=classifier or make_classifier(),
-        adapters=[*adapters, *make_hold_adapters()],
+        adapters=[*adapters, StatusAdapter(store), *make_hold_adapters()],
     )
     gateway.hold_manager = make_hold_manager(HoldDeps(store=store, bus=bus, runner=gateway))
     return Services(
