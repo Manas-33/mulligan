@@ -38,6 +38,32 @@ jobs:
       - run: make typecheck
       - run: make test
 
+  approvals-photon:
+    name: approvals-photon (types, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: approvals-photon/package-lock.json
+      - run: make photon-setup
+      - run: make photon-check
+
+  dashboard:
+    name: dashboard (types, tests, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: make dashboard-setup
+      - run: make dashboard-check
+
   compose:
     name: compose (both Postgres DBs come up)
     runs-on: ubuntu-latest

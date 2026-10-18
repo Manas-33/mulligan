@@ -82,7 +82,9 @@ services:
 
   approvals-photon:
     profiles: [app]
-    build: ./approvals-photon
+    build:
+      context: .
+      dockerfile: approvals-photon/Dockerfile
     env_file:
       - path: .env
         required: false
@@ -96,7 +98,15 @@ services:
 
   dashboard:
     profiles: [app]
-    build: ./dashboard
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+      args:
+        # Baked into the bundle at build time; the browser on the laptop calls the host port.
+        VITE_MULLIGAN_API_URL: http://127.0.0.1:${MULLIGAN_API_PORT:-8000}
+        VITE_MULLIGAN_DASHBOARD_TOKEN: ${MULLIGAN_DASHBOARD_TOKEN:-}
+        SENTRY_DSN_DASHBOARD: ${SENTRY_DSN_DASHBOARD:-}
+        SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-dev}
     env_file:
       - path: .env
         required: false
