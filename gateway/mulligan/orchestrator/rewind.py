@@ -31,6 +31,8 @@ from mulligan.models import (
 _UNDOABLE = {ActionStatus.executed, ActionStatus.held, ActionStatus.approved}
 _AFTER_STEP = {
     StepResult.restored: ActionStatus.reverted,
+    # A refund or a correction email offsets the effect; the step result says which it was.
+    StepResult.compensated: ActionStatus.reverted,
     StepResult.kept_human_edit: ActionStatus.conflict,
     StepResult.failed: ActionStatus.revert_failed,
 }
