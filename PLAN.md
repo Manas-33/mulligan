@@ -50,7 +50,7 @@ mulligan/
 │   │   └── classify/          #   B: policy lookup + rules gate for unknown upstream tools
 │   ├── migrations/            #   A: mulligan-db schema
 │   └── tests/
-├── approvals-photon/          # B: TypeScript spectrum-ts service (src/, test/)
+├── approvals-photon/          # B: TypeScript Photon 2.0 (@photon-ai/api) service (src/, test/)
 ├── dashboard/                 # B: React + Vite. ALL UI (src/, public/)
 ├── fetch-agent/               # A: uAgents Guardian + worker (tests/)
 ├── demo/                      # A: seed/, scripts/ (rogue agent live + replay, teammate edit, reset), recordings/, upstream/, checksums/
@@ -167,7 +167,8 @@ Built-in tools: `pg_query`, `pg_insert_rows`, `pg_update_rows`, `pg_delete_rows`
 
 ### 1.5 Python interfaces (`gateway/mulligan/interfaces.py`)
 - `Adapter.capture_before(call) -> ref`, `execute(call) -> result`, `capture_after(...) -> (ref, after_hashes)`, `build_inverse(...)`, `revert(action) -> StepResult`, `checksum() -> str`. `revert` re-reads every field in `after_hashes` and restores only the fields whose current hash still matches. The others come back as `kept_human_edit` in `kept_fields`. Nothing is merged.
-- `HoldManager.hold(action)`, `on_decision(action_id, decision)`, `release_due()`, `cancel(action)`
+- `HoldManager.hold(action)`, `on_decision(action_id, decision)`, `release_due()`, `cancel(action)`. `cancel` covers only actions that haven't run yet (held or approved).
+- Email and payments are `Adapter`s too, owned by Stream B in `gateway/mulligan/holds/` (`create_adapters()`). A rewind calls their `revert` like any other system's: payments cancels an authorization that wasn't captured (`payments.cancel_authorization`, `restored`) and refunds a captured one (`payments.refund`, step result `compensated`); a sent email is `skipped`, or `compensated` if a correction email goes out. A payment's `hold.release_at` must come before `hold.authorization_expires_at` (Stripe's `capture_before`).
 - `Policy.lookup(tool) -> Reversibility | None` reads `contracts/reversibility_policy.yaml`.
 - `Classifier.classify_unknown(tool_schema) -> Reversibility` runs only when `Policy.lookup` returns None. It is a deterministic rules check, not a model. The gateway lets the call through only if the label is `read_only`. Any other label, or an error, holds the call for approval (fail closed). Stream A ships a stub that always returns `irreversible` (hold everything), and Stream B replaces it with the rules gate. The interface stays, so a trained model could be swapped in later without touching the gateway.
 
@@ -196,7 +197,7 @@ GOAL: An agent connected over MCP changes prod-db through the typed Postgres too
 ```
 GOAL: The Photon service delivers an approval text for a held action and turns the reply into an approve/reject decision on the gateway (mock or real). The dashboard shell renders sessions and actions from the mock API.
 ```
-- `approvals-photon/` (TS): spectrum-ts client, 4-digit codes, reply parsing (`YES 4821` / `NO 4821`), retry handling, the `/notify/*` endpoints.
+- `approvals-photon/` (TS): Photon 2.0 client (`@photon-ai/api`), 4-digit codes, reply parsing (`YES 4821` / `NO 4821`), retry handling, the `/notify/*` endpoints.
 - `gateway/mulligan/holds/`: approval state machine (`held` to `approved`/`rejected`/`expired`) behind the `HoldManager` interface.
 - Dashboard: React and Vite scaffold, typed API client, Sentry React with Session Replay, session list and action timeline driven by the mock and SSE. Start the Paper design in parallel.
 
