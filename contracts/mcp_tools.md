@@ -92,8 +92,9 @@ All tools act on `GITHUB_ORG/GITHUB_REPO` only.
 | `email_send` | `{to: email[] (1..1000), subject, body: string, cc?: email[]}` | `{action_id, status: "held"}` | irreversible | `email_outbox` |
 | `payments_charge` | `{customer_id: string, amount_cents: int (1..100000), currency?: string = "usd", description: string}` | `{action_id, status: "held"}` | compensable | `payment_auth` |
 
-- Email waits in an outbox until someone approves it, then sends. A rewind before approval cancels it; after sending it is `skipped`, and the rewind offers a correction email.
-- A payment is authorized only after approval (`capture_method=manual`) and captured when `hold.release_at` passes the undo window. A rewind before capture cancels the authorization.
+- Both are Stream B's adapters in `gateway/mulligan/holds/` (systems `email` and `payments`). A rewind sends an action that hasn't run yet (held or approved) to `HoldManager.cancel`, and one that ran to the adapter's `revert`, like any other system.
+- Email waits in an outbox until someone approves it, then sends. A rewind before sending cancels it (`email.cancel_outbox`, `restored`). After sending it is `skipped`, or `compensated` if the adapter sends a correction email (`email.send_correction`).
+- A payment is authorized only after approval (`capture_method=manual`) and captured when `hold.release_at` passes the undo window, which must be before `hold.authorization_expires_at` (Stripe's `capture_before`). A rewind before capture cancels the authorization (`payments.cancel_authorization`, `restored`); after capture it refunds (`payments.refund`, `compensated`).
 
 ## Mulligan
 

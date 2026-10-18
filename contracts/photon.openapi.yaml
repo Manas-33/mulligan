@@ -4,8 +4,16 @@ info:
   version: 0.1.0
   description: |
     Served by `approvals-photon/` (Stream B), called by the gateway. It texts the approver over iMessage
-    (spectrum-ts) and turns replies like `YES 4821` / `NO 4821` into
+    through Photon 2.0 (`@photon-ai/api`) and turns replies like `YES 4821` / `NO 4821` into
     `POST /api/approvals/{action_id}/decision` on the gateway (channel `imessage`).
+
+    **Approver handle.** `to` is the approver's iMessage handle (`APPROVER_HANDLE`): an E.164 phone
+    number or an Apple ID email.
+
+    **Approver not reachable.** A shared Photon line can't text first: the approver has to text the
+    line once before Mulligan can message them. Until then both `/notify/*` routes return 409
+    `approver_not_reachable`, and retrying won't help. The gateway logs it, keeps the action `held`,
+    and the dashboard (or ASI:One) stays the way to approve or reject it.
 
     **Addresses.** Under docker compose the gateway calls `http://approvals-photon:8100`, and the service calls the
     gateway at `http://gateway:8000`. Run on the host, they use `http://127.0.0.1:8100` and `http://127.0.0.1:8000`.
@@ -68,6 +76,7 @@ paths:
               schema: { $ref: "./action.schema.json#/$defs/NotifyResponse" }
               example: { message_id: msg_01M561R2302EME3JAF7RBZWM16, status: queued }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/ApproverNotReachable" }
         "422": { $ref: "#/components/responses/Invalid" }
 
   /notify/summary:
@@ -91,6 +100,7 @@ paths:
               schema: { $ref: "./action.schema.json#/$defs/NotifyResponse" }
               example: { message_id: msg_01M561RFRGVASABYV8XG40DDX0, status: queued }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/ApproverNotReachable" }
         "422": { $ref: "#/components/responses/Invalid" }
 
 components:
@@ -111,4 +121,12 @@ components:
       content:
         application/json:
           schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
-          example: { detail: "to must be E.164" }
+          example: { detail: "to must be an E.164 phone number or an email" }
+    ApproverNotReachable:
+      description: |
+        The approver hasn't texted the shared line yet, so it can't text them first. Don't retry;
+        the action stays held and can be decided from the dashboard or ASI:One.
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: "approver_not_reachable" }
