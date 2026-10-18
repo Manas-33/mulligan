@@ -38,6 +38,10 @@ class MulliganAPI:
         result: dict[str, Any] = await self._request("GET", f"/api/actions/{action_id}")
         return result
 
+    async def session(self, session_id: str) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request("GET", f"/api/sessions/{session_id}")
+        return result
+
     async def session_actions(self, session_id: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._request(
             "GET", "/api/actions", params={"session_id": session_id, "limit": 1000}

@@ -52,6 +52,10 @@ class FakeAPI:
     async def session_actions(self, session_id: str) -> list[dict[str, Any]]:
         return [READ, DELETE, HELD]
 
+    async def session(self, session_id: str) -> dict[str, Any]:
+        kind = "fetch" if session_id == SES else "claude_code"
+        return {"id": session_id, "agent": {"id": kind, "kind": kind}}
+
     async def decide(
         self, action_id: str, decision: str, code: str, decided_by: str
     ) -> dict[str, Any]:
@@ -170,9 +174,23 @@ async def test_sessions_and_actions_it_didnt_run_are_refused() -> None:
         "user1", parse(json.dumps({"action": "rewind", "session_id": other}))
     )
     assert "isn't a session I ran" in typed.text and api.rewound == []
+
+    class OtherSession(FakeAPI):
+        async def action(self, action_id: str) -> dict[str, Any]:
+            return {**HELD, "session_id": other}
+
+    api2 = OtherSession()
     click = json.dumps({"action": "approve", "action_id": HELD["id"], "code": "4821"})
-    approved = await logic.handle("user1", parse(click))
-    assert "isn't from a session I ran" in approved.text and api.decisions == []
+    approved = await GuardianLogic(api2).handle("user1", parse(click))  # type: ignore[arg-type]
+    assert "isn't from a session I ran" in approved.text and api2.decisions == []
+
+
+async def test_a_card_from_before_a_restart_still_works() -> None:
+    api = FakeAPI()
+    logic = GuardianLogic(api)  # type: ignore[arg-type]  # fresh: no sessions remembered
+    click = json.dumps({"action": "rewind", "session_id": SES, "approved": True})
+    reply = await logic.handle("user1", parse(click))
+    assert api.rewound == [SES] and "completed" in reply.text
 
 
 async def test_gateway_unreachable_after_a_task_still_gets_a_reply() -> None:
