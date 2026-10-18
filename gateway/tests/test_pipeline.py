@@ -396,3 +396,13 @@ async def test_a_call_still_running_is_waited_for_and_undone(
     assert adapter.rows[1]["price"] == 49
     action = await svc.store.get(done.steps[0].action_id)
     assert action is not None and action.status is ActionStatus.reverted
+
+
+async def test_event_seq_keeps_counting_after_a_demo_reset(svc: Services) -> None:
+    first = await svc.gateway.start_session(AGENT, SessionMode.live)
+    before = await svc.bus.replay(0)
+    await svc.store.clear()
+    assert await svc.bus.replay(0) == []
+    await svc.gateway.start_session(AGENT, SessionMode.live)
+    after = await svc.bus.replay(0)
+    assert first.id and after[0].root.seq > before[-1].root.seq
