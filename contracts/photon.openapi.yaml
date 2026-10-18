@@ -1,0 +1,114 @@
+openapi: 3.1.0
+info:
+  title: Mulligan Photon service API
+  version: 0.1.0
+  description: |
+    Served by `approvals-photon/` (Stream B), called by the gateway. It texts the approver over iMessage
+    (spectrum-ts) and turns replies like `YES 4821` / `NO 4821` into
+    `POST /api/approvals/{action_id}/decision` on the gateway (channel `imessage`).
+
+    **Addresses.** Under docker compose the gateway calls `http://approvals-photon:8100`, and the service calls the
+    gateway at `http://gateway:8000`. Run on the host, they use `http://127.0.0.1:8100` and `http://127.0.0.1:8000`.
+
+    **Auth.** Every route except `GET /healthz` needs `X-Mulligan-Service-Token: <MULLIGAN_SERVICE_TOKEN>`, the same
+    token the service sends to the gateway. A missing or wrong token gets 401.
+
+    **Mock.** `make mocks` serves this spec with Prism on `http://127.0.0.1:4011`.
+servers:
+  - url: http://approvals-photon:8100
+    description: From the gateway container
+  - url: http://127.0.0.1:8100
+    description: From a host process
+  - url: http://127.0.0.1:4011
+    description: Prism mock (make mocks)
+security:
+  - serviceToken: []
+
+paths:
+  /healthz:
+    get:
+      operationId: photonHealthz
+      summary: Liveness check. The only route without a token.
+      security: []
+      responses:
+        "200":
+          description: Up
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+              example: { ok: true }
+
+  /notify/approval:
+    post:
+      operationId: notifyApproval
+      summary: Text the approver a code for a held action
+      description: |
+        Sends e.g. `Claude Code wants to email 412 customers: "Important update". Reply YES 4821 or NO 4821.`
+        Returns once the message is queued; delivery is retried by the service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "./action.schema.json#/$defs/NotifyApprovalRequest" }
+            example:
+              action_id: act_01M561R2302EME3JAF7RBZWM16
+              code: "4821"
+              summary: 'Claude Code wants to email 412 customers: "Important update to your account"'
+              to: "+15555550123"
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/NotifyResponse" }
+              example: { message_id: msg_01M561R2302EME3JAF7RBZWM16, status: queued }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /notify/summary:
+    post:
+      operationId: notifySummary
+      summary: Text a summary after a rewind
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "./action.schema.json#/$defs/NotifySummaryRequest" }
+            example:
+              rewind_job_id: rwd_01M561RFRGVASABYV8XG40DDX0
+              text: "Rewound Claude Code's session: 5 actions undone, email cancelled, 1 teammate edit kept (products/42 price). Checksums match."
+              to: "+15555550123"
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/NotifyResponse" }
+              example: { message_id: msg_01M561RFRGVASABYV8XG40DDX0, status: queued }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+components:
+  securitySchemes:
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Mulligan-Service-Token
+  responses:
+    Unauthorized:
+      description: Missing or wrong token
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: "missing or invalid token" }
+    Invalid:
+      description: Invalid body
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: "to must be E.164" }

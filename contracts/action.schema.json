@@ -1,0 +1,1253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MulliganContracts",
+  "description": "Shared types for the Mulligan gateway, dashboard and Photon service. Generates gateway/mulligan/models.py (Pydantic v2) and contracts/generated/types.ts. Every timestamp is RFC 3339 UTC. Every id is a type prefix plus a ULID, so ids sort by creation time.",
+  "$defs": {
+    "AgentKind": {
+      "type": "string",
+      "enum": [
+        "claude_code",
+        "devin",
+        "fetch",
+        "rogue",
+        "other"
+      ]
+    },
+    "Agent": {
+      "type": "object",
+      "description": "Who made the calls. Resolved from the per-agent bearer token, never from anything the agent sends.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "display_name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "claude_code"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "display_name": {
+          "type": "string",
+          "examples": [
+            "Claude Code"
+          ]
+        }
+      }
+    },
+    "System": {
+      "type": "string",
+      "enum": [
+        "postgres",
+        "github",
+        "notion",
+        "email",
+        "payments",
+        "upstream",
+        "mulligan"
+      ],
+      "description": "upstream: a tool from an MCP server behind Mulligan. mulligan: Mulligan's own read-only tools (mulligan_status)."
+    },
+    "ActionStatus": {
+      "type": "string",
+      "description": "Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).",
+      "enum": [
+        "pending",
+        "held",
+        "approved",
+        "rejected",
+        "executing",
+        "executed",
+        "failed",
+        "reverting",
+        "reverted",
+        "conflict",
+        "revert_failed",
+        "expired"
+      ]
+    },
+    "ReversibilityLabel": {
+      "type": "string",
+      "description": "read_only: changes nothing. reversible: undo leaves no visible trace. reversible_noisy: undo works, but people or webhooks may already have been notified, or history keeps a trace. compensable: can't be undone, but can be offset (refund, correction email). irreversible: neither.",
+      "enum": [
+        "read_only",
+        "reversible",
+        "reversible_noisy",
+        "compensable",
+        "irreversible"
+      ]
+    },
+    "ReversibilitySource": {
+      "type": "string",
+      "description": "policy: contracts/reversibility_policy.yaml (every built-in tool). rules: the rules gate (upstream tools only). override: set by a person.",
+      "enum": [
+        "policy",
+        "rules",
+        "override"
+      ]
+    },
+    "Reversibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "source",
+        "reason"
+      ],
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/ReversibilityLabel"
+        },
+        "source": {
+          "$ref": "#/$defs/ReversibilitySource"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why this label. For source=rules, which rule fired, shown in the dashboard to explain a hold.",
+          "examples": [
+            "name starts with 'post', not a read verb"
+          ]
+        }
+      }
+    },
+    "Inverse": {
+      "type": "object",
+      "description": "Adapter-specific undo recipe. Opaque outside the adapter that wrote it.",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "<adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox, payments.cancel_authorization, none.",
+          "examples": [
+            "postgres.audit_log"
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ApprovalChannel": {
+      "type": "string",
+      "enum": [
+        "imessage",
+        "dashboard"
+      ]
+    },
+    "ApprovalDecision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "reject"
+      ]
+    },
+    "Approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "channel",
+        "requested_at",
+        "expires_at",
+        "decided_at",
+        "decided_by",
+        "decision"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[0-9]{4}$",
+          "description": "Unique among actions currently held, so a reply 'YES 4821' names exactly one action.",
+          "examples": [
+            "4821"
+          ]
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalChannel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The channel the decision came from. null until decided."
+        },
+        "requested_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "When the hold expires undecided (status becomes expired). null means it never expires."
+        },
+        "decided_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "decided_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Free text naming the person, e.g. 'imessage:+1555…' or 'dashboard'.",
+          "examples": [
+            "dashboard"
+          ]
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "HoldKind": {
+      "type": "string",
+      "enum": [
+        "email_outbox",
+        "payment_auth"
+      ]
+    },
+    "Hold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "release_at",
+        "external_id"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/HoldKind"
+        },
+        "release_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "payment_auth: when the authorization is captured (end of the undo window). email_outbox: null, it sends on approval."
+        },
+        "external_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Stripe PaymentIntent id, or the outbox row id.",
+          "examples": [
+            "pi_3Q0example"
+          ]
+        }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "description": "One tool call an agent made through Mulligan.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "session_id",
+        "agent",
+        "system",
+        "tool",
+        "upstream_server",
+        "args_redacted",
+        "status",
+        "reversibility",
+        "summary",
+        "error",
+        "before_ref",
+        "after_ref",
+        "after_hashes",
+        "inverse",
+        "approval",
+        "hold",
+        "explanation",
+        "sentry_trace_id",
+        "created_at",
+        "executed_at",
+        "reverted_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^act_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "act_01M561QDJRQ23HY0VT7QKFVHHZ"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "ses_01M561Q6R04CJZXHXRCFFNM7C4"
+          ]
+        },
+        "agent": {
+          "$ref": "#/$defs/Agent"
+        },
+        "system": {
+          "$ref": "#/$defs/System"
+        },
+        "tool": {
+          "type": "string",
+          "description": "The MCP tool name the agent called. Upstream tools appear as upstream__<server>__<tool>.",
+          "examples": [
+            "pg_delete_rows",
+            "upstream__slack__post_message"
+          ]
+        },
+        "upstream_server": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Name of the MCP server behind Mulligan, or null for built-in tools.",
+          "examples": [
+            null,
+            "slack"
+          ]
+        },
+        "args_redacted": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "The call's arguments with secrets stripped and long values truncated."
+        },
+        "status": {
+          "$ref": "#/$defs/ActionStatus"
+        },
+        "reversibility": {
+          "$ref": "#/$defs/Reversibility"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "One deterministic line written by the gateway, e.g. 'Deleted 412 rows from customers (cascaded 1,203 orders)'.",
+          "examples": [
+            "Deleted 412 rows from customers (cascaded 1,203 orders, 2,611 order_items)"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the call failed (status failed) or the revert failed (status revert_failed)."
+        },
+        "before_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Opaque pointer to the captured before-state, owned by the adapter, e.g. pg-audit:<action_id> or pg-trash:<trash table>."
+        },
+        "after_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Opaque pointer to the after-state, owned by the adapter."
+        },
+        "after_hashes": {
+          "type": "object",
+          "description": "sha256 (lowercase hex) of the value the action left in every field it changed, keyed by field path. A rewind re-hashes each field and restores it only if the hash still matches; otherwise a human changed it and it is kept. An absent row or field hashes as sha256('') and a SQL NULL as sha256('null'). Field path format: <system>:<resource path>[/<field>]. Postgres: postgres:products/42/price (one column of one row), postgres:customers/7 (a whole row the action inserted or deleted), postgres:legacy_pricing (a dropped table); a table outside public is written schema.table. GitHub: github:issues/17/state, github:comments/<id>, github:files/<path>. Notion: notion:<page_id>/properties/<name>, notion:<page_id>/blocks/<block_id>, notion:<page_id> (trash state). Composite primary keys join their values with a comma; '%', '/' and ',' inside a segment are percent-encoded.",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 3
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "inverse": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Inverse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Approval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hold"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explanation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Plain-English explanation (StepFun), filled in asynchronously. Never blocks the action."
+        },
+        "sentry_trace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "executed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "reverted_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "SessionMode": {
+      "type": "string",
+      "description": "replay: the session came from the demo replay client's token.",
+      "enum": [
+        "live",
+        "replay"
+      ]
+    },
+    "SessionStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "ended",
+        "rewound"
+      ]
+    },
+    "Session": {
+      "type": "object",
+      "description": "One agent's MCP session: one Mcp-Session-Id, or, for a client on the sessionless MCP protocol, one per agent token until it has been idle for 30 minutes.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "agent",
+        "mode",
+        "started_at",
+        "ended_at",
+        "action_count",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "ses_01M561Q6R04CJZXHXRCFFNM7C4"
+          ]
+        },
+        "agent": {
+          "$ref": "#/$defs/Agent"
+        },
+        "mode": {
+          "$ref": "#/$defs/SessionMode"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "action_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/SessionStatus"
+        }
+      }
+    },
+    "RewindScope": {
+      "type": "object",
+      "description": "Which actions to rewind. Every field given must match (AND). {session_id} rewinds a session, {since} rewinds everything after a time, {session_id, since} rewinds a session back to a time, {action_ids} rewinds exactly those.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "ses_01M561Q6R04CJZXHXRCFFNM7C4"
+          ]
+        },
+        "since": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "action_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "description": "act_<ulid>"
+          }
+        }
+      }
+    },
+    "RewindJobStatus": {
+      "type": "string",
+      "description": "planned: a dry run, nothing changed. partial: finished, but some steps failed.",
+      "enum": [
+        "planned",
+        "running",
+        "completed",
+        "partial",
+        "failed"
+      ]
+    },
+    "StepResult": {
+      "type": "string",
+      "description": "pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. skipped: nothing to undo or nothing safe to do (read-only, an email already sent, a human reused a deleted row's key). failed: see detail.",
+      "enum": [
+        "pending",
+        "restored",
+        "kept_human_edit",
+        "skipped",
+        "failed"
+      ]
+    },
+    "FieldChangeOutcome": {
+      "type": "string",
+      "enum": [
+        "restore",
+        "keep_human_edit",
+        "skip"
+      ]
+    },
+    "FieldChange": {
+      "type": "object",
+      "description": "One field a rewind step looks at. Values are JSON; for a whole row or table they are the row object or null when absent.",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "before",
+        "agent_value",
+        "current",
+        "outcome"
+      ],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "A field path (see Action.after_hashes).",
+          "minLength": 3,
+          "examples": [
+            "postgres:products/42/price"
+          ]
+        },
+        "before": {
+          "description": "Value before the agent's action. What the rewind restores."
+        },
+        "agent_value": {
+          "description": "What the agent wrote."
+        },
+        "current": {
+          "description": "Value when the step was planned or run. Differs from agent_value if a human changed it."
+        },
+        "outcome": {
+          "$ref": "#/$defs/FieldChangeOutcome"
+        }
+      }
+    },
+    "RewindStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "system",
+        "tool",
+        "result",
+        "kept_fields",
+        "changes",
+        "changes_truncated",
+        "detail"
+      ],
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "pattern": "^act_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "act_01M561QDJRQ23HY0VT7QKFVHHZ"
+          ]
+        },
+        "system": {
+          "$ref": "#/$defs/System"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/StepResult"
+        },
+        "kept_fields": {
+          "type": "array",
+          "description": "Field paths a human changed after the agent, left as the human set them.",
+          "items": {
+            "type": "string",
+            "description": "A field path (see Action.after_hashes)."
+          }
+        },
+        "changes": {
+          "type": "array",
+          "description": "Per-field diff for the dashboard. Capped at 200 entries; kept fields always come first.",
+          "items": {
+            "$ref": "#/$defs/FieldChange"
+          }
+        },
+        "changes_truncated": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "examples": [
+            "Re-inserted 412 customers, 1,203 orders, 2,611 order_items (parents first)"
+          ]
+        }
+      }
+    },
+    "SystemVerification": {
+      "type": "object",
+      "description": "expected: checksum of the pre-session state with kept human edits applied on top. actual: checksum after the rewind.",
+      "additionalProperties": false,
+      "required": [
+        "expected",
+        "actual",
+        "ok"
+      ],
+      "properties": {
+        "expected": {
+          "type": "string"
+        },
+        "actual": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "null until the rewind has run."
+        }
+      }
+    },
+    "RewindJob": {
+      "type": "object",
+      "description": "A rewind plan (dry_run) or run. Steps go newest action first.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scope",
+        "dry_run",
+        "status",
+        "steps",
+        "verification",
+        "requested_by",
+        "error",
+        "created_at",
+        "started_at",
+        "completed_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^rwd_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "rwd_01M561RFRGVASABYV8XG40DDX0"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/RewindScope"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/RewindJobStatus"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RewindStep"
+          }
+        },
+        "verification": {
+          "type": "object",
+          "description": "Keyed by system. Only systems the rewind touched appear.",
+          "propertyNames": {
+            "$ref": "#/$defs/System"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/SystemVerification"
+          }
+        },
+        "requested_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "examples": [
+            "dashboard",
+            "fetch:guardian",
+            "imessage"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "SystemChecksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hash",
+        "computed_at"
+      ],
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Checksums": {
+      "type": "object",
+      "description": "Current checksum per system, from canonical sorted output. Held channels (email, payments) and upstream have none.",
+      "propertyNames": {
+        "$ref": "#/$defs/System"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/SystemChecksum"
+      }
+    },
+    "RewindRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RewindScope"
+        },
+        "dry_run": {
+          "type": "boolean",
+          "default": true,
+          "description": "true (the default) only plans: status planned, every step pending, with diffs. false plans and runs."
+        },
+        "requested_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "ApprovalDecisionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "code",
+        "channel",
+        "decided_by"
+      ],
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[0-9]{4}$"
+        },
+        "channel": {
+          "$ref": "#/$defs/ApprovalChannel"
+        },
+        "decided_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "DemoResetResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "checksums"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "checksums": {
+          "$ref": "#/$defs/Checksums"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "description": "FastAPI's error shape. detail is a string, or a list of validation errors for 422.",
+      "required": [
+        "detail"
+      ],
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "EventName": {
+      "type": "string",
+      "enum": [
+        "session.started",
+        "session.ended",
+        "action.created",
+        "action.classified",
+        "action.held",
+        "action.approved",
+        "action.rejected",
+        "action.executed",
+        "action.failed",
+        "rewind.planned",
+        "rewind.started",
+        "rewind.step",
+        "rewind.completed",
+        "rewind.failed",
+        "checksum.verified",
+        "hold.released",
+        "hold.expired"
+      ]
+    },
+    "SessionEventName": {
+      "type": "string",
+      "enum": [
+        "session.started",
+        "session.ended"
+      ]
+    },
+    "ActionEventName": {
+      "type": "string",
+      "enum": [
+        "action.created",
+        "action.classified",
+        "action.held",
+        "action.approved",
+        "action.rejected",
+        "action.executed",
+        "action.failed",
+        "hold.released",
+        "hold.expired"
+      ]
+    },
+    "RewindJobEventName": {
+      "type": "string",
+      "enum": [
+        "rewind.planned",
+        "rewind.started",
+        "rewind.completed",
+        "rewind.failed"
+      ]
+    },
+    "RewindStepEventName": {
+      "type": "string",
+      "enum": [
+        "rewind.step"
+      ]
+    },
+    "ChecksumEventName": {
+      "type": "string",
+      "enum": [
+        "checksum.verified"
+      ]
+    },
+    "SessionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/SessionEventName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "$ref": "#/$defs/Session"
+        }
+      }
+    },
+    "ActionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/ActionEventName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "$ref": "#/$defs/Action"
+        }
+      }
+    },
+    "RewindJobEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/RewindJobEventName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "$ref": "#/$defs/RewindJob"
+        }
+      }
+    },
+    "RewindStepData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rewind_job_id",
+        "step",
+        "action"
+      ],
+      "properties": {
+        "rewind_job_id": {
+          "type": "string",
+          "pattern": "^rwd_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "rwd_01M561RFRGVASABYV8XG40DDX0"
+          ]
+        },
+        "step": {
+          "$ref": "#/$defs/RewindStep"
+        },
+        "action": {
+          "$ref": "#/$defs/Action"
+        }
+      },
+      "description": "data for rewind.step. action is the action after the step, with its new status (reverted, conflict or revert_failed)."
+    },
+    "RewindStepEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/RewindStepEventName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "$ref": "#/$defs/RewindStepData"
+        }
+      }
+    },
+    "ChecksumVerifiedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system",
+        "expected",
+        "actual",
+        "ok",
+        "rewind_job_id"
+      ],
+      "properties": {
+        "system": {
+          "$ref": "#/$defs/System"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "actual": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "rewind_job_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^rwd_[0-9A-HJKMNP-TV-Z]{26}$"
+        }
+      }
+    },
+    "ChecksumEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/ChecksumEventName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "$ref": "#/$defs/ChecksumVerifiedData"
+        }
+      }
+    },
+    "MulliganEvent": {
+      "description": "Envelope of every SSE and internal-bus event. Narrow on `event`.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionEvent"
+        },
+        {
+          "$ref": "#/$defs/ActionEvent"
+        },
+        {
+          "$ref": "#/$defs/RewindJobEvent"
+        },
+        {
+          "$ref": "#/$defs/RewindStepEvent"
+        },
+        {
+          "$ref": "#/$defs/ChecksumEvent"
+        }
+      ]
+    },
+    "NotifyApprovalRequest": {
+      "type": "object",
+      "description": "Gateway -> Photon service: text the approver a code for a held action.",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "code",
+        "summary",
+        "to"
+      ],
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "pattern": "^act_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "act_01M561QDJRQ23HY0VT7QKFVHHZ"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[0-9]{4}$"
+        },
+        "summary": {
+          "type": "string",
+          "description": "Plain text, under 300 characters, e.g. 'Claude Code wants to email 412 customers: \"Price update\"'."
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^\\+[1-9][0-9]{6,14}$",
+          "description": "E.164."
+        }
+      }
+    },
+    "NotifySummaryRequest": {
+      "type": "object",
+      "description": "Gateway -> Photon service: text a summary after a rewind.",
+      "additionalProperties": false,
+      "required": [
+        "rewind_job_id",
+        "text",
+        "to"
+      ],
+      "properties": {
+        "rewind_job_id": {
+          "type": "string",
+          "pattern": "^rwd_[0-9A-HJKMNP-TV-Z]{26}$",
+          "examples": [
+            "rwd_01M561RFRGVASABYV8XG40DDX0"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^\\+[1-9][0-9]{6,14}$"
+        }
+      }
+    },
+    "NotifyResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "status"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/NotifyStatus"
+        }
+      }
+    },
+    "NotifyStatus": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "sent"
+      ]
+    }
+  }
+}

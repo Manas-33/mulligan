@@ -1,0 +1,94 @@
+# The label for every built-in MCP tool. This file is the authority: the gateway refuses to start if
+# a registered built-in tool has no entry here, and the rules gate is never asked about built-in tools.
+#
+# label: read_only | reversible | reversible_noisy | compensable | irreversible
+# hold:  null (runs now) | email_outbox | payment_auth (waits for approval; Stream B's holds/)
+# reason: shown in the dashboard next to the label
+
+version: 1
+
+tools:
+  # Postgres
+  pg_query:
+    system: postgres
+    label: read_only
+    hold: null
+    reason: Runs as a SELECT-only role in a READ ONLY transaction with a timeout and row cap.
+  pg_insert_rows:
+    system: postgres
+    label: reversible
+    hold: null
+    reason: Undo deletes the inserted rows by primary key.
+  pg_update_rows:
+    system: postgres
+    label: reversible
+    hold: null
+    reason: Undo writes back the old column values from the audit log.
+  pg_delete_rows:
+    system: postgres
+    label: reversible
+    hold: null
+    reason: Undo re-inserts the deleted rows, including cascaded children, parents first.
+  pg_drop_table:
+    system: postgres
+    label: reversible
+    hold: null
+    reason: Soft drop into mulligan_trash. Undo moves the table back with its data, indexes and foreign keys.
+
+  # GitHub
+  github_list_issues:
+    system: github
+    label: read_only
+    hold: null
+    reason: Reads issues.
+  github_close_issue:
+    system: github
+    label: reversible_noisy
+    hold: null
+    reason: Undo reopens the issue, but watchers were already notified.
+  github_comment:
+    system: github
+    label: reversible_noisy
+    hold: null
+    reason: Undo deletes the comment, but watchers were already notified.
+  github_update_file:
+    system: github
+    label: reversible_noisy
+    hold: null
+    reason: Undo commits the old content back; both commits stay in history.
+
+  # Notion
+  notion_get_page:
+    system: notion
+    label: read_only
+    hold: null
+    reason: Reads a page.
+  notion_update_page:
+    system: notion
+    label: reversible
+    hold: null
+    reason: Undo restores the captured properties and blocks.
+  notion_trash_page:
+    system: notion
+    label: reversible
+    hold: null
+    reason: Undo takes the page out of the trash.
+
+  # Held channels
+  email_send:
+    system: email
+    label: irreversible
+    hold: email_outbox
+    reason: A sent email can't be recalled, so it waits for approval.
+  payments_charge:
+    system: payments
+    label: compensable
+    hold: payment_auth
+    reason: Waits for approval, then authorizes and captures after the undo window. A capture can only be refunded.
+
+  # Mulligan
+  mulligan_status:
+    system: mulligan
+    label: read_only
+    hold: null
+    reason: Reads Mulligan's own log.

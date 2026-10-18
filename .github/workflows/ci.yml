@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: contracts (types up to date, OpenAPI lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: 0.9.18
+      - run: make setup
+      - run: make types-check
+      - run: make lint-contracts
+
+  gateway:
+    name: gateway (lint, types, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: 0.9.18
+      - run: make setup
+      - run: make lint
+      - run: make typecheck
+      - run: make test
+
+  compose:
+    name: compose (both Postgres DBs come up)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose --profile app config -q
+      - run: make db
+      - name: prod-db has Mulligan's schemas, roles and audit trigger function
+        run: |
+          docker compose exec -T prod-db psql -U acme -d acme -v ON_ERROR_STOP=1 -tAc \
+            "select count(*) from pg_namespace where nspname in ('mulligan_trash','mulligan_audit')" | grep -qx 2
+          docker compose exec -T prod-db psql -U acme -d acme -v ON_ERROR_STOP=1 -tAc \
+            "select count(*) from pg_roles where rolname in ('mulligan_gw','mulligan_ro')" | grep -qx 2
+          docker compose exec -T prod-db psql -U acme -d acme -v ON_ERROR_STOP=1 -tAc \
+            "select mulligan_audit.field_hash(null)" | grep -qx e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      - name: mulligan-db has TimescaleDB
+        run: |
+          docker compose exec -T mulligan-db psql -U mulligan -d mulligan -v ON_ERROR_STOP=1 -tAc \
+            "select extname from pg_extension where extname = 'timescaledb'" | grep -qx timescaledb
+      - if: always()
+        run: docker compose down -v

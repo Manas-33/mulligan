@@ -95,7 +95,7 @@ Done when: both type sets generate, mock servers run, `docker compose up` brings
 ```
 
 ### 1.1 `contracts/` (single source of truth)
-- `action.schema.json` (JSON Schema) generates `gateway/mulligan/models.py` (Pydantic v2) and `dashboard/src/types.ts` and `approvals-photon/src/types.ts`.
+- `action.schema.json` (JSON Schema) generates `gateway/mulligan/models.py` (Pydantic v2) and `contracts/generated/types.ts` (`make types`), which the dashboard and the Photon service import or copy.
 
 **Action**
 ```
@@ -147,9 +147,9 @@ Auth: the UI uses a dashboard token. Service-to-service calls (Photon, Fetch) us
 | Port | Bind | Serves | Reached by |
 |---|---|---|---|
 | `8000` (`MULLIGAN_API_PORT`) | `127.0.0.1` only | REST `/api/*`, SSE `/api/events`, `/healthz` | dashboard, Photon service, Fetch agent, demo scripts (all on the laptop) |
-| `8001` (`MULLIGAN_MCP_PORT`) | `0.0.0.0` | MCP `/mcp` only (Streamable HTTP) | Claude Code locally, and Devin through the cloudflared quick tunnel |
+| `8001` (`MULLIGAN_MCP_PORT`) | `127.0.0.1` only | MCP `/mcp` only (Streamable HTTP) | Claude Code locally, and Devin through the cloudflared quick tunnel, which runs on the laptop |
 
-Under `docker compose`, the bind column means the host port mapping (`"127.0.0.1:8000:8000"` and `"8001:8001"`). Inside the container both servers listen on `0.0.0.0` so the dashboard and Photon containers can reach the gateway over the compose network. The tunnel points at `:8001` only, so the REST API is never public. This is free and needs no Cloudflare account or domain. If the changing quick-tunnel URL becomes a problem, the free upgrade is ngrok's single static domain, still pointed at `:8001` only.
+Under `docker compose`, the bind column means the host port mapping (`"127.0.0.1:8000:8000"` and `"127.0.0.1:8001:8001"`), so nothing listens on the venue Wi-Fi. Inside the container both servers listen on `0.0.0.0` so the Photon container can reach the gateway over the compose network at `http://gateway:8000`; `127.0.0.1` inside a container is the container itself. Browser code and host processes use `http://127.0.0.1:8000`. The tunnel points at `:8001` only, so the REST API is never public. This is free and needs no Cloudflare account or domain. If the changing quick-tunnel URL becomes a problem, the free upgrade is ngrok's single static domain, still pointed at `:8001` only.
 
 **Photon service API (Stream B serves it, the gateway calls it):** `POST /notify/approval {action_id, code, summary, to}`, `POST /notify/summary {rewind_job_id, text, to}`. Replies get parsed and forwarded to `/api/approvals/{id}/decision`.
 
@@ -159,11 +159,11 @@ Under `docker compose`, the bind column means the host port mapping (`"127.0.0.1
 ### 1.4 `contracts/mcp_tools.md` and `contracts/reversibility_policy.yaml` (what agents see)
 Built-in tools: `pg_query`, `pg_insert_rows`, `pg_update_rows`, `pg_delete_rows`, `pg_drop_table`, `github_list_issues`, `github_close_issue`, `github_comment`, `github_update_file`, `notion_get_page`, `notion_update_page`, `notion_trash_page`, `email_send` (held), `payments_charge` (held), `mulligan_status`. Each entry lists its input schema and its adapter.
 - **No raw SQL writes.** Postgres write tools take a table, a structured filter (`[{column, op, value}]`) and values, so Mulligan knows which rows a call touches before it runs. Deleting every row needs an explicit `all: true`. `pg_query` accepts SQL but runs under a read-only role in a `READ ONLY` transaction, so it can't change anything. It also gets a `statement_timeout` (default 5 s, `PG_QUERY_TIMEOUT_MS`) and a row cap, so a read can't hang the gateway or the DB.
-- **Soft drop.** `pg_drop_table` moves the table into the `mulligan_trash` schema, which agents can't see, and renames it `<table>__<action_id>`. Undo moves it back. Trashed tables are purged only after the undo window closes.
+- **Soft drop.** `pg_drop_table` moves the table into the `mulligan_trash` schema, which agents can't see, and renames it `<action_id>__<table>` cut to 63 bytes (Postgres silently truncates longer names, which would cut the id off the end), along with its indexes and owned sequences. Undo moves it back. Trashed tables are purged only after the undo window closes.
   - **Known difference from a real `DROP`:** moving a table keeps every foreign key that points at it, and so does a rename. A real `DROP` without `CASCADE` would fail on those FKs, and `DROP ... CASCADE` would remove them. Mulligan does neither: the drop always succeeds, referencing tables keep working against the trashed table, and undo needs no FK repair. The tool's result tells the agent which FKs still reference the table, and the action log records them. This is deliberate. Don't "fix" it by dropping FKs.
 - **Undo order inside one action.** An action's audit rows are reverted newest first, except that re-inserted rows go parents first (the method chosen in spike 0.3), so cascaded deletes come back without FK errors.
 - **Policy table.** `reversibility_policy.yaml` gives every built-in tool its label. It is the authority: the gateway won't start if a built-in tool has no entry, and the rules gate is never asked about built-in tools.
-- **Upstream tools.** Tools from MCP servers placed behind Mulligan are exposed as `upstream__<server>__<tool>`. They have no policy entry and no undo adapter, so every call goes through the rules gate (1.5).
+- **Upstream tools.** Tools from MCP servers placed behind Mulligan are exposed as `upstream__<server>__<tool>`. They have no policy entry and no undo adapter, so every call goes through the rules gate (1.5). The schema the rules gate gets carries the upstream server's original tool name (`post_message`), not the exposed name, or the read-verb rule would never match.
 
 ### 1.5 Python interfaces (`gateway/mulligan/interfaces.py`)
 - `Adapter.capture_before(call) -> ref`, `execute(call) -> result`, `capture_after(...) -> (ref, after_hashes)`, `build_inverse(...)`, `revert(action) -> StepResult`, `checksum() -> str`. `revert` re-reads every field in `after_hashes` and restores only the fields whose current hash still matches. The others come back as `kept_human_edit` in `kept_fields`. Nothing is merged.
@@ -263,7 +263,7 @@ GOAL: `docker compose up` on the demo laptop runs the whole stack (both DBs, gat
 ```
 
 **Stream A:** Run the gateway and both DBs on the demo laptop under `docker compose`. A free cloudflared quick tunnel points at the MCP port (`:8001`) only, giving Devin a public HTTPS URL. A quick tunnel's URL changes whenever it restarts, so keep it running and update Devin's MCP settings if it does. Add a check script that hits the tunnel URL and confirms `/api/*` isn't reachable there, and that every local route returns 401 without a token. Set up Sentry Logs and AI agent monitoring, backups of the action log, and a load check (200 actions in the log, rewind under 30 s). Add a Claude Code `PreToolUse` hook config (docs check against code.claude.com/docs/en/hooks) for demo laptops that blocks direct DB, `gh` and curl calls, so the only route is Mulligan.
-**Stream B:** Add the dashboard (built with Vite and served from its compose service) and the Photon service to `docker compose`, both talking to the gateway on `127.0.0.1:8000`. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, and the Photon flow).
+**Stream B:** Add the dashboard (built with Vite and served from its compose service) and the Photon service to `docker compose`, with the Photon container talking to the gateway at `http://gateway:8000` and the dashboard's browser code at `http://127.0.0.1:8000`. Make sure Session Replay, error boundaries, empty and error states, and phone-width layout all work. Prepare the sponsor-evidence page (how Sentry data shaped the build, and the Photon flow).
 
 **STOP — approval gate.**
 

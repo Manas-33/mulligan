@@ -1,0 +1,107 @@
+# Everything runs on the demo laptop. Host ports bind to 127.0.0.1 only; the cloudflared quick
+# tunnel (make tunnel) runs on the laptop and points at the MCP port, so nothing here listens on
+# the venue network.
+#
+#   make db   both Postgres DBs (enough for gateway development on the host)
+#   make up   the whole stack (profile "app")
+#
+# Inside the compose network, services reach each other by service name (http://gateway:8000);
+# 127.0.0.1 inside a container is that container. Browser code and host processes use
+# http://127.0.0.1:8000.
+
+name: mulligan
+
+services:
+  mulligan-db:
+    image: timescale/timescaledb:2.30.2-pg16
+    environment:
+      POSTGRES_USER: mulligan
+      POSTGRES_PASSWORD: mulligan
+      POSTGRES_DB: mulligan
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - mulligan-db-data:/var/lib/postgresql/data
+      - ./infra/db/mulligan-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mulligan -d mulligan"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  prod-db:
+    image: postgres:16.15
+    environment:
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: acme
+      POSTGRES_DB: acme
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - prod-db-data:/var/lib/postgresql/data
+      - ./infra/db/prod-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acme -d acme"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  gateway:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Listen on every interface inside the container so other containers can reach it; the
+      # host side is still 127.0.0.1 only (ports below).
+      MULLIGAN_BIND_HOST: 0.0.0.0
+      MULLIGAN_API_PORT: "8000"
+      MULLIGAN_MCP_PORT: "8001"
+      MULLIGAN_DB_URL: postgresql://mulligan:mulligan@mulligan-db:5432/mulligan
+      PROD_DB_URL: postgresql://mulligan_gw:mulligan_gw@prod-db:5432/acme
+      PROD_DB_READONLY_URL: postgresql://mulligan_ro:mulligan_ro@prod-db:5432/acme
+      PHOTON_SERVICE_URL: http://approvals-photon:8100
+      MULLIGAN_POLICY_PATH: /app/contracts/reversibility_policy.yaml
+    ports:
+      - "127.0.0.1:${MULLIGAN_API_PORT:-8000}:8000"
+      - "127.0.0.1:${MULLIGAN_MCP_PORT:-8001}:8001"
+    depends_on:
+      mulligan-db: { condition: service_healthy }
+      prod-db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  approvals-photon:
+    profiles: [app]
+    build: ./approvals-photon
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MULLIGAN_API_URL: http://gateway:8000
+      PORT: "8100"
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      gateway: { condition: service_healthy }
+
+  dashboard:
+    profiles: [app]
+    build: ./dashboard
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      gateway: { condition: service_healthy }
+
+volumes:
+  mulligan-db-data:
+  prod-db-data:

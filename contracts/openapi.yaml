@@ -1,0 +1,789 @@
+openapi: 3.1.0
+info:
+  title: Mulligan gateway REST API
+  version: 0.1.0
+  description: |
+    REST and SSE for the dashboard, the Photon service, the Fetch agent and the demo scripts.
+    Agents never use this API; they reach Mulligan over MCP on its own port.
+
+    **Where it listens.** The gateway serves this API on port 8000 (`MULLIGAN_API_PORT`).
+    - Browser code and host processes (dashboard in the browser, Fetch agent, demo scripts) use `http://127.0.0.1:8000`.
+      Under docker compose the host port is bound to `127.0.0.1` only.
+    - Containers on the compose network (the Photon service) use `http://gateway:8000`.
+      `127.0.0.1` inside a container is that container, not the gateway.
+    - The cloudflared tunnel never points here. It exposes only the MCP port (8001).
+
+    **Auth.** Every route needs a token except `GET /healthz`.
+    - Dashboard: `Authorization: Bearer <MULLIGAN_DASHBOARD_TOKEN>`.
+    - Services (Photon, Fetch): `X-Mulligan-Service-Token: <MULLIGAN_SERVICE_TOKEN>`.
+    - A missing or wrong token gets 401. `/api/demo/reset` needs the dashboard token and `MULLIGAN_DEMO=1`, and is 404 otherwise.
+
+    **CORS.** The gateway allows the origins in `MULLIGAN_CORS_ORIGINS` (default `http://localhost:5173,http://127.0.0.1:5173`).
+
+    **Mock.** `make mocks` serves this spec with Prism on `http://127.0.0.1:4010`, using the examples below.
+    Send `Prefer: example=<name>` to pick an example, or `Prefer: code=<status>` for another response.
+servers:
+  - url: http://127.0.0.1:8000
+    description: Gateway from the browser or a host process
+  - url: http://gateway:8000
+    description: Gateway from a container on the compose network
+  - url: http://127.0.0.1:4010
+    description: Prism mock (make mocks)
+security:
+  - dashboardToken: []
+  - serviceToken: []
+tags:
+  - name: sessions
+  - name: actions
+  - name: rewind
+  - name: approvals
+  - name: checksums
+  - name: events
+  - name: demo
+  - name: health
+
+components:
+  securitySchemes:
+    dashboardToken:
+      type: http
+      scheme: bearer
+      description: MULLIGAN_DASHBOARD_TOKEN
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Mulligan-Service-Token
+      description: MULLIGAN_SERVICE_TOKEN (Photon service, Fetch agent)
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+    SessionIdPath:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^ses_[0-9A-HJKMNP-TV-Z]{26}$" }
+    ActionIdPath:
+      name: action_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^act_[0-9A-HJKMNP-TV-Z]{26}$" }
+
+  responses:
+    Unauthorized:
+      description: Missing or wrong token
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: "missing or invalid token" }
+    NotFound:
+      description: No such resource
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: "not found" }
+    Conflict:
+      description: A rewind is already running
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: "rewind rwd_01M561RFRGVASABYV8XG40DDX0 is running" }
+    Invalid:
+      description: Invalid body
+      content:
+        application/json:
+          schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+          example: { detail: [{ loc: [body, scope], msg: "scope needs at least one field", type: value_error }] }
+
+  examples:
+    SessionActive:
+      summary: Live Claude Code session, still running
+      value: &SessionActive
+        id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        mode: live
+        started_at: "2026-10-17T23:04:00Z"
+        ended_at: null
+        action_count: 5
+        status: active
+    SessionReplay:
+      summary: Recorded rogue-agent run replayed for the demo
+      value: &SessionReplay
+        id: ses_01M561RPK8R9VB7NKR3B61H8GW
+        agent: { id: rogue_replay, kind: rogue, display_name: Cleanup agent (replay) }
+        mode: replay
+        started_at: "2026-10-17T22:40:00Z"
+        ended_at: "2026-10-17T22:41:12Z"
+        action_count: 58
+        status: rewound
+
+    ActionDeleteExecuted:
+      summary: pg_delete_rows that cascaded into two child tables
+      value: &ActionDeleteExecuted
+        id: act_01M561QDJRQ23HY0VT7QKFVHHZ
+        session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        system: postgres
+        tool: pg_delete_rows
+        upstream_server: null
+        args_redacted:
+          table: customers
+          filter: [{ column: last_order_at, op: lt, value: "2025-10-01" }]
+        status: executed
+        reversibility: { label: reversible, source: policy, reason: null }
+        summary: Deleted 412 rows from customers (cascaded 1,203 orders, 2,611 order_items)
+        error: null
+        before_ref: "pg-audit:act_01M561QDJRQ23HY0VT7QKFVHHZ"
+        after_ref: "pg-audit:act_01M561QDJRQ23HY0VT7QKFVHHZ"
+        after_hashes:
+          "postgres:customers/7": 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+          "postgres:customers/19": 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+        inverse:
+          kind: postgres.audit_log
+          payload:
+            action_id: act_01M561QDJRQ23HY0VT7QKFVHHZ
+            audit_ids: [1041, 5267]
+            tables: [public.customers, public.order_items, public.orders]
+        approval: null
+        hold: null
+        explanation: The agent deleted every customer with no order in the last year, which also removed their orders and line items.
+        sentry_trace_id: 4bf92f3577b34da6a3ce929d0e0e4736
+        created_at: "2026-10-17T23:04:07Z"
+        executed_at: "2026-10-17T23:04:07.412Z"
+        reverted_at: null
+    ActionUpdatePrice:
+      summary: pg_update_rows that a teammate later edits by hand
+      value: &ActionUpdatePrice
+        id: act_01M561QMDGVQT2P6RJ36HMDZ5T
+        session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        system: postgres
+        tool: pg_update_rows
+        upstream_server: null
+        args_redacted:
+          table: products
+          filter: [{ column: id, op: eq, value: 42 }]
+          values: { price: 0 }
+        status: executed
+        reversibility: { label: reversible, source: policy, reason: null }
+        summary: Updated 1 row in products (price)
+        error: null
+        before_ref: "pg-audit:act_01M561QMDGVQT2P6RJ36HMDZ5T"
+        after_ref: "pg-audit:act_01M561QMDGVQT2P6RJ36HMDZ5T"
+        after_hashes:
+          "postgres:products/42/price": 5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
+        inverse:
+          kind: postgres.audit_log
+          payload: { action_id: act_01M561QMDGVQT2P6RJ36HMDZ5T, audit_ids: [5268, 5268], tables: [public.products] }
+        approval: null
+        hold: null
+        explanation: null
+        sentry_trace_id: 5ae1e2b2a3c44f0f9d5b7a1c2e3f4a5b
+        created_at: "2026-10-17T23:04:14Z"
+        executed_at: "2026-10-17T23:04:14.090Z"
+        reverted_at: null
+    ActionDropTable:
+      summary: pg_drop_table, a soft drop into mulligan_trash
+      value: &ActionDropTable
+        id: act_01M561QV889BFCN8BX9G1VE36W
+        session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        system: postgres
+        tool: pg_drop_table
+        upstream_server: null
+        args_redacted: { table: legacy_pricing }
+        status: executed
+        reversibility: { label: reversible, source: policy, reason: null }
+        summary: Dropped table legacy_pricing (moved to trash; 1 foreign key still points at it)
+        error: null
+        before_ref: "pg-trash:act_01m561qv889bfcn8bx9g1ve36w__legacy_pricing"
+        after_ref: "pg-trash:act_01m561qv889bfcn8bx9g1ve36w__legacy_pricing"
+        after_hashes:
+          "postgres:legacy_pricing": 2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3
+        inverse:
+          kind: postgres.undrop_table
+          payload:
+            schema: public
+            name: legacy_pricing
+            trash_schema: mulligan_trash
+            trash_name: act_01m561qv889bfcn8bx9g1ve36w__legacy_pricing
+            renamed: [{ kind: index, name: legacy_pricing_pkey, trash_name: act_01m561qv889bfcn8bx9g1ve36w_i1 }]
+            inbound_fks: [{ child: price_overrides, conname: price_overrides_legacy_pricing_id_fkey }]
+        approval: null
+        hold: null
+        explanation: null
+        sentry_trace_id: 6c1f2e3d4b5a46978899aabbccddeeff
+        created_at: "2026-10-17T23:04:21Z"
+        executed_at: "2026-10-17T23:04:21.050Z"
+        reverted_at: null
+    ActionEmailHeld:
+      summary: email_send waiting for iMessage approval
+      value: &ActionEmailHeld
+        id: act_01M561R2302EME3JAF7RBZWM16
+        session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        system: email
+        tool: email_send
+        upstream_server: null
+        args_redacted:
+          to: ["412 recipients"]
+          subject: Important update to your account
+          body: "Dear customer, …"
+        status: held
+        reversibility: { label: irreversible, source: policy, reason: null }
+        summary: Email 412 customers "Important update to your account"
+        error: null
+        before_ref: null
+        after_ref: null
+        after_hashes: {}
+        inverse: { kind: email.cancel_outbox, payload: { outbox_id: 17 } }
+        approval:
+          code: "4821"
+          channel: null
+          requested_at: "2026-10-17T23:04:28Z"
+          expires_at: "2026-10-17T23:19:28Z"
+          decided_at: null
+          decided_by: null
+          decision: null
+        hold: { kind: email_outbox, release_at: null, external_id: "outbox_17" }
+        explanation: null
+        sentry_trace_id: 7d2a3b4c5d6e4f708192a3b4c5d6e7f8
+        created_at: "2026-10-17T23:04:28Z"
+        executed_at: null
+        reverted_at: null
+    ActionEmailApproved:
+      summary: The same email after YES 4821
+      value: &ActionEmailApproved
+        id: act_01M561R2302EME3JAF7RBZWM16
+        session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        system: email
+        tool: email_send
+        upstream_server: null
+        args_redacted:
+          to: ["412 recipients"]
+          subject: Important update to your account
+          body: "Dear customer, …"
+        status: approved
+        reversibility: { label: irreversible, source: policy, reason: null }
+        summary: Email 412 customers "Important update to your account"
+        error: null
+        before_ref: null
+        after_ref: null
+        after_hashes: {}
+        inverse: { kind: email.cancel_outbox, payload: { outbox_id: 17 } }
+        approval:
+          code: "4821"
+          channel: imessage
+          requested_at: "2026-10-17T23:04:28Z"
+          expires_at: "2026-10-17T23:19:28Z"
+          decided_at: "2026-10-17T23:05:02Z"
+          decided_by: "imessage:+15555550123"
+          decision: approve
+        hold: { kind: email_outbox, release_at: null, external_id: "outbox_17" }
+        explanation: null
+        sentry_trace_id: 7d2a3b4c5d6e4f708192a3b4c5d6e7f8
+        created_at: "2026-10-17T23:04:28Z"
+        executed_at: null
+        reverted_at: null
+    ActionUpstreamHeld:
+      summary: An upstream tool the rules gate held
+      value: &ActionUpstreamHeld
+        id: act_01M561R8XR9B8FKFRNVHR3M4C9
+        session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4
+        agent: { id: claude_code, kind: claude_code, display_name: Claude Code }
+        system: upstream
+        tool: upstream__slack__post_message
+        upstream_server: slack
+        args_redacted: { channel: "#general", text: "Cleanup done: removed 412 inactive customers" }
+        status: held
+        reversibility:
+          label: irreversible
+          source: rules
+          reason: "name 'post_message' doesn't start with a read verb"
+        summary: "slack.post_message to #general"
+        error: null
+        before_ref: null
+        after_ref: null
+        after_hashes: {}
+        inverse: null
+        approval:
+          code: "3307"
+          channel: null
+          requested_at: "2026-10-17T23:04:35Z"
+          expires_at: "2026-10-17T23:19:35Z"
+          decided_at: null
+          decided_by: null
+          decision: null
+        hold: null
+        explanation: null
+        sentry_trace_id: 8e3b4c5d6e7f40819203b4c5d6e7f809
+        created_at: "2026-10-17T23:04:35Z"
+        executed_at: null
+        reverted_at: null
+
+    RewindPlanned:
+      summary: Dry run of the whole session
+      value: &RewindPlanned
+        id: rwd_01M561RFRGVASABYV8XG40DDX0
+        scope: { session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4 }
+        dry_run: true
+        status: planned
+        steps:
+          - action_id: act_01M561R8XR9B8FKFRNVHR3M4C9
+            system: upstream
+            tool: upstream__slack__post_message
+            result: pending
+            kept_fields: []
+            changes: []
+            changes_truncated: false
+            detail: Still held. The rewind rejects it.
+          - action_id: act_01M561R2302EME3JAF7RBZWM16
+            system: email
+            tool: email_send
+            result: pending
+            kept_fields: []
+            changes: []
+            changes_truncated: false
+            detail: Not sent yet. The rewind cancels it.
+          - action_id: act_01M561QV889BFCN8BX9G1VE36W
+            system: postgres
+            tool: pg_drop_table
+            result: pending
+            kept_fields: []
+            changes:
+              - field: "postgres:legacy_pricing"
+                before: { rows: 120 }
+                agent_value: null
+                current: null
+                outcome: restore
+            changes_truncated: false
+            detail: Move legacy_pricing back from mulligan_trash
+          - action_id: act_01M561QMDGVQT2P6RJ36HMDZ5T
+            system: postgres
+            tool: pg_update_rows
+            result: pending
+            kept_fields: ["postgres:products/42/price"]
+            changes:
+              - field: "postgres:products/42/price"
+                before: 49
+                agent_value: 0
+                current: 45
+                outcome: keep_human_edit
+            changes_truncated: false
+            detail: A teammate changed products/42/price after the agent. Their value stays.
+          - action_id: act_01M561QDJRQ23HY0VT7QKFVHHZ
+            system: postgres
+            tool: pg_delete_rows
+            result: pending
+            kept_fields: []
+            changes:
+              - field: "postgres:customers/7"
+                before: { id: 7, name: Ada Park, email: ada@example.com, last_order_at: "2025-03-02" }
+                agent_value: null
+                current: null
+                outcome: restore
+            changes_truncated: true
+            detail: Re-insert 412 customers, 1,203 orders, 2,611 order_items (parents first)
+        verification:
+          postgres: { expected: "9f2c1a…e41b", actual: null, ok: null }
+        requested_by: dashboard
+        error: null
+        created_at: "2026-10-17T23:06:00Z"
+        started_at: null
+        completed_at: null
+    RewindRunning:
+      summary: A run in progress
+      value: &RewindRunning
+        id: rwd_01M561RFRGVASABYV8XG40DDX0
+        scope: { session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4 }
+        dry_run: false
+        status: running
+        steps:
+          - action_id: act_01M561R8XR9B8FKFRNVHR3M4C9
+            system: upstream
+            tool: upstream__slack__post_message
+            result: skipped
+            kept_fields: []
+            changes: []
+            changes_truncated: false
+            detail: Rejected while held. Nothing was sent.
+          - action_id: act_01M561R2302EME3JAF7RBZWM16
+            system: email
+            tool: email_send
+            result: pending
+            kept_fields: []
+            changes: []
+            changes_truncated: false
+            detail: null
+        verification:
+          postgres: { expected: "9f2c1a…e41b", actual: null, ok: null }
+        requested_by: dashboard
+        error: null
+        created_at: "2026-10-17T23:06:10Z"
+        started_at: "2026-10-17T23:06:10Z"
+        completed_at: null
+    RewindCompleted:
+      summary: Finished, with one human edit kept
+      value: &RewindCompleted
+        id: rwd_01M561RFRGVASABYV8XG40DDX0
+        scope: { session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4 }
+        dry_run: false
+        status: completed
+        steps:
+          - action_id: act_01M561QMDGVQT2P6RJ36HMDZ5T
+            system: postgres
+            tool: pg_update_rows
+            result: kept_human_edit
+            kept_fields: ["postgres:products/42/price"]
+            changes:
+              - field: "postgres:products/42/price"
+                before: 49
+                agent_value: 0
+                current: 45
+                outcome: keep_human_edit
+            changes_truncated: false
+            detail: A teammate changed products/42/price after the agent. Their value stays.
+          - action_id: act_01M561QDJRQ23HY0VT7QKFVHHZ
+            system: postgres
+            tool: pg_delete_rows
+            result: restored
+            kept_fields: []
+            changes: []
+            changes_truncated: true
+            detail: Re-inserted 412 customers, 1,203 orders, 2,611 order_items (parents first)
+        verification:
+          postgres: { expected: "9f2c1a…e41b", actual: "9f2c1a…e41b", ok: true }
+          github: { expected: "03b7d4…9a10", actual: "03b7d4…9a10", ok: true }
+          notion: { expected: "e5a9c0…1c3f", actual: "e5a9c0…1c3f", ok: true }
+        requested_by: dashboard
+        error: null
+        created_at: "2026-10-17T23:06:10Z"
+        started_at: "2026-10-17T23:06:10Z"
+        completed_at: "2026-10-17T23:06:19Z"
+
+    Checksums:
+      summary: Per-system checksums
+      value: &Checksums
+        postgres: { hash: "9f2c1a…e41b", computed_at: "2026-10-17T23:06:19Z" }
+        github: { hash: "03b7d4…9a10", computed_at: "2026-10-17T23:06:19Z" }
+        notion: { hash: "e5a9c0…1c3f", computed_at: "2026-10-17T23:06:19Z" }
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: healthz
+      summary: Liveness check. The only route without a token.
+      security: []
+      responses:
+        "200":
+          description: Up
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+              example: { ok: true }
+
+  /api/sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: List agent sessions, newest first
+      parameters:
+        - { name: status, in: query, schema: { $ref: "./action.schema.json#/$defs/SessionStatus" } }
+        - { name: agent_kind, in: query, schema: { $ref: "./action.schema.json#/$defs/AgentKind" } }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Sessions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "./action.schema.json#/$defs/Session" }
+              examples:
+                default:
+                  value:
+                    - *SessionActive
+                    - *SessionReplay
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/sessions/{session_id}:
+    get:
+      tags: [sessions]
+      operationId: getSession
+      summary: One session
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      responses:
+        "200":
+          description: The session
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/Session" }
+              examples:
+                active: { $ref: "#/components/examples/SessionActive" }
+                replay: { $ref: "#/components/examples/SessionReplay" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/actions:
+    get:
+      tags: [actions]
+      operationId: listActions
+      summary: Action timeline, oldest first unless order=desc
+      parameters:
+        - name: session_id
+          in: query
+          schema: { type: string, pattern: "^ses_[0-9A-HJKMNP-TV-Z]{26}$" }
+        - name: since
+          in: query
+          description: Only actions created at or after this time.
+          schema: { type: string, format: date-time }
+        - { name: system, in: query, schema: { $ref: "./action.schema.json#/$defs/System" } }
+        - { name: status, in: query, schema: { $ref: "./action.schema.json#/$defs/ActionStatus" } }
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: asc }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Actions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "./action.schema.json#/$defs/Action" }
+              examples:
+                default:
+                  value:
+                    - *ActionDeleteExecuted
+                    - *ActionUpdatePrice
+                    - *ActionDropTable
+                    - *ActionEmailHeld
+                    - *ActionUpstreamHeld
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/actions/{action_id}:
+    get:
+      tags: [actions]
+      operationId: getAction
+      summary: One action
+      parameters:
+        - $ref: "#/components/parameters/ActionIdPath"
+      responses:
+        "200":
+          description: The action
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/Action" }
+              examples:
+                deleteExecuted: { $ref: "#/components/examples/ActionDeleteExecuted" }
+                updatePrice: { $ref: "#/components/examples/ActionUpdatePrice" }
+                dropTable: { $ref: "#/components/examples/ActionDropTable" }
+                emailHeld: { $ref: "#/components/examples/ActionEmailHeld" }
+                upstreamHeld: { $ref: "#/components/examples/ActionUpstreamHeld" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/rewind:
+    post:
+      tags: [rewind]
+      operationId: createRewind
+      summary: Plan (dry_run, the default) or run a rewind
+      description: |
+        dry_run=true returns 200 with status `planned`: every step `pending`, with its per-field diff, and nothing changed.
+        dry_run=false returns 202 with status `running`. Follow it with `GET /api/rewind/{id}` or the `rewind.*` events.
+        Steps go newest action first. Only one rewind runs at a time; a second gets 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "./action.schema.json#/$defs/RewindRequest" }
+            examples:
+              planSession:
+                value: { scope: { session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4 }, dry_run: true, requested_by: dashboard }
+              runSession:
+                value: { scope: { session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4 }, dry_run: false, requested_by: dashboard }
+              rewindToTime:
+                value: { scope: { session_id: ses_01M561Q6R04CJZXHXRCFFNM7C4, since: "2026-10-17T23:04:10Z" }, dry_run: true }
+      responses:
+        "200":
+          description: Dry run. The plan, nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/RewindJob" }
+              examples:
+                planned: { $ref: "#/components/examples/RewindPlanned" }
+        "202":
+          description: Run accepted and started
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/RewindJob" }
+              examples:
+                running: { $ref: "#/components/examples/RewindRunning" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+    get:
+      tags: [rewind]
+      operationId: listRewinds
+      summary: Rewind jobs, newest first
+      parameters:
+        - name: session_id
+          in: query
+          schema: { type: string, pattern: "^ses_[0-9A-HJKMNP-TV-Z]{26}$" }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "./action.schema.json#/$defs/RewindJob" }
+              examples:
+                default:
+                  value:
+                    - *RewindCompleted
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/rewind/{rewind_job_id}:
+    get:
+      tags: [rewind]
+      operationId: getRewind
+      summary: Rewind progress and result
+      parameters:
+        - name: rewind_job_id
+          in: path
+          required: true
+          schema: { type: string, pattern: "^rwd_[0-9A-HJKMNP-TV-Z]{26}$" }
+      responses:
+        "200":
+          description: The job
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/RewindJob" }
+              examples:
+                completed: { $ref: "#/components/examples/RewindCompleted" }
+                running: { $ref: "#/components/examples/RewindRunning" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/approvals/{action_id}/decision:
+    post:
+      tags: [approvals]
+      operationId: decideApproval
+      summary: Approve or reject a held action
+      description: |
+        Called by the Photon service when a reply like `YES 4821` arrives (channel imessage), or by the dashboard (channel dashboard).
+        The code must match the action's approval code. Returns the action with its new status:
+        `approved` (then `executing`, `executed` as the hold releases) or `rejected`.
+      parameters:
+        - $ref: "#/components/parameters/ActionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "./action.schema.json#/$defs/ApprovalDecisionRequest" }
+            examples:
+              imessageYes:
+                value: { decision: approve, code: "4821", channel: imessage, decided_by: "imessage:+15555550123" }
+              dashboardReject:
+                value: { decision: reject, code: "4821", channel: dashboard, decided_by: dashboard }
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/Action" }
+              examples:
+                approved: { $ref: "#/components/examples/ActionEmailApproved" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The action isn't held (already decided, expired or never held)
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+              example: { detail: "action is approved, not held" }
+        "422":
+          description: Wrong code, or an invalid body
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/ErrorResponse" }
+              example: { detail: "code does not match" }
+
+  /api/checksums:
+    get:
+      tags: [checksums]
+      operationId: getChecksums
+      summary: Current checksum per system
+      parameters:
+        - name: recompute
+          in: query
+          description: Recompute now instead of returning the last computed values.
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Checksums keyed by system
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/Checksums" }
+              examples:
+                default: { $ref: "#/components/examples/Checksums" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: Server-sent events (see contracts/events.md)
+      description: |
+        Each event is framed as `id: <seq>`, `event: <name>`, `data: <JSON envelope>`.
+        The envelope is a `MulliganEvent` from action.schema.json. A `: ping` comment is sent every 15 s.
+        Reconnect with `Last-Event-ID` to receive events missed since that seq (up to the last 1,000).
+        Browsers' `EventSource` can't send headers, so use a fetch-based client (for example
+        `@microsoft/fetch-event-source`) with the `Authorization` header.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                id: 41
+                event: action.held
+                data: {"event":"action.held","seq":41,"ts":"2026-10-17T23:04:28Z","data":{"id":"act_01M561R2302EME3JAF7RBZWM16","status":"held"}}
+
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/demo/reset:
+    post:
+      tags: [demo]
+      operationId: demoReset
+      summary: Wipe and reseed prod-db, GitHub and Notion, clear the log, return checksums
+      description: Dev only. Needs `MULLIGAN_DEMO=1` and the dashboard token; 404 otherwise.
+      security:
+        - dashboardToken: []
+      responses:
+        "200":
+          description: Reset done
+          content:
+            application/json:
+              schema: { $ref: "./action.schema.json#/$defs/DemoResetResult" }
+              example:
+                ok: true
+                checksums: *Checksums
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
