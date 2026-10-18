@@ -14,10 +14,16 @@ import hashlib
 import importlib.util
 import json
 import sys
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
-from mulligan.adapters.github.client import GitHubClient, GitHubError, content_path
-from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult
+from mulligan.adapters.github.client import (
+    GitHubClient,
+    GitHubError,
+    GitHubWriteUnknown,
+    content_path,
+)
+from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult, WriteUncertain
 from mulligan.models import (
     Action,
     FieldChange,
@@ -32,6 +38,8 @@ from mulligan.settings import REPO_ROOT, Settings
 ABSENT = hashlib.sha256(b"").hexdigest()
 MOD = 2**256
 TEXT_LIMIT = 4000  # characters of file text kept for the dashboard's diff
+# A comment whose POST got no answer is looked for among those created this close to the call.
+FIND_WINDOW = timedelta(minutes=2)
 SEED_MODULE = REPO_ROOT / "demo" / "seed" / "github_seed.py"
 
 WRITE_TOOLS = frozenset({"github_close_issue", "github_comment", "github_update_file"})
@@ -128,6 +136,24 @@ def _text(item: dict[str, Any] | None) -> str | None:
 
 def _plural(n: int, noun: str) -> str:
     return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
+def git_blob_sha(data: bytes) -> str:
+    """The blob sha GitHub gives a file with these bytes."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
+
+
+def comment_ref(comment: dict[str, Any]) -> dict[str, Any]:
+    return {"id": comment["id"], "body": (comment.get("body") or "")[:2000]}
+
+
+def comment_lookup(body: str) -> dict[str, Any]:
+    """How a rewind finds a comment whose POST got no answer: the body's hash and the time."""
+    return {"hash": field_hash(body), "at": datetime.now(UTC).isoformat()}
+
+
+def _when(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 class GitHubAdapter(Adapter):
@@ -255,16 +281,38 @@ class GitHubAdapter(Adapter):
             raise ToolError("state_reason must be completed or not_planned")
         comment = None
         if args.get("comment"):
-            comment = await self.client.send(
-                "POST", f"issues/{number}/comments", {"body": str(args["comment"])}
-            )
+            body = str(args["comment"])
+            lookup = comment_lookup(body)
+            try:
+                comment = await self.client.send(
+                    "POST", f"issues/{number}/comments", {"body": body}
+                )
+            except GitHubWriteUnknown as exc:
+                # The comment may be there; the close was never sent.
+                inverse = self._comment_inverse(number, None, lookup)
+                raise WriteUncertain(str(exc), before_ref=before.ref, inverse=inverse) from exc
+        closing = {"state": "closed", "state_reason": reason}
         try:
-            closed = await self.client.send(
-                "PATCH", f"issues/{number}", {"state": "closed", "state_reason": reason}
-            )
-        except GitHubError:
+            closed = await self.client.send("PATCH", f"issues/{number}", closing)
+        except GitHubWriteUnknown as exc:
+            # The issue may be closed: keep the comment, and let a rewind undo both.
+            raise WriteUncertain(
+                str(exc),
+                before_ref=before.ref,
+                inverse=self._issue_inverse(before.state["issue"], closing, comment),
+                after_hashes=self._issue_hashes(number, closing, comment),
+            ) from exc
+        except GitHubError as exc:
             if comment:  # don't leave half an action behind
-                await self.client.request("DELETE", f"issues/comments/{comment['id']}")
+                try:
+                    await self.client.request("DELETE", f"issues/comments/{comment['id']}")
+                except GitHubError:
+                    raise WriteUncertain(
+                        f"{exc}; the comment it added couldn't be deleted",
+                        before_ref=before.ref,
+                        inverse=self._comment_inverse(number, comment, None),
+                        after_hashes=self._issue_hashes(number, None, comment),
+                    ) from exc
             raise
         before.state.update({"closed": closed, "comment": comment})
         summary = f"Closed issue #{number} ({reason.replace('_', ' ')})"
@@ -279,7 +327,12 @@ class GitHubAdapter(Adapter):
         body = str(args["body"])
         if not body.strip():
             raise ToolError("body is empty")
-        comment = await self.client.send("POST", f"issues/{number}/comments", {"body": body})
+        lookup = comment_lookup(body)
+        try:
+            comment = await self.client.send("POST", f"issues/{number}/comments", {"body": body})
+        except GitHubWriteUnknown as exc:
+            inverse = self._comment_inverse(number, None, lookup)
+            raise WriteUncertain(str(exc), before_ref=before.ref, inverse=inverse) from exc
         before.state["comment"] = comment
         return ToolResult(
             structured_content={"comment_id": comment["id"], "url": comment.get("html_url")},
@@ -301,6 +354,18 @@ class GitHubAdapter(Adapter):
             body["sha"] = sha
         try:
             out = await self.client.send("PUT", content_path(path), body)
+        except GitHubWriteUnknown as exc:
+            # The blob sha is known without GitHub's answer, so a rewind can check for it.
+            agent_sha = git_blob_sha(content.encode())
+            before.state.update(
+                {"agent_sha": agent_sha, "commit_sha": None, "agent_text": content[:TEXT_LIMIT]}
+            )
+            raise WriteUncertain(
+                str(exc),
+                before_ref=before.ref,
+                inverse=self._file_inverse(before.state),
+                after_hashes={self.file_key(path, branch): field_hash(agent_sha)},
+            ) from exc
         except GitHubError as exc:
             if exc.status == 409:
                 raise ToolError(f"{path} changed while it was being updated; retry") from exc
@@ -320,9 +385,7 @@ class GitHubAdapter(Adapter):
         state = before.state
         if call.tool == "github_close_issue":
             closed, comment = state["closed"], state.get("comment")
-            hashes = {f"github:issues/{closed['number']}/state": field_hash(state_value(closed))}
-            if comment:
-                hashes[f"github:comments/{comment['id']}"] = field_hash(comment.get("body") or "")
+            hashes = self._issue_hashes(closed["number"], state_value(closed), comment)
             return Capture(ref=f"github:issues/{closed['number']}", after_hashes=hashes)
         if call.tool == "github_comment":
             comment = state["comment"]
@@ -345,42 +408,67 @@ class GitHubAdapter(Adapter):
     ) -> Inverse | None:
         state = before.state
         if call.tool == "github_close_issue":
-            issue, comment = state["issue"], state.get("comment")
-            return Inverse(
-                kind="github.reopen_issue",
-                payload={
-                    "number": issue["number"],
-                    "title": issue.get("title") or "",
-                    "before": state_value(issue),
-                    "after": state_value(state["closed"]),
-                    "comment": {"id": comment["id"], "body": (comment.get("body") or "")[:2000]}
-                    if comment
-                    else None,
-                },
+            return self._issue_inverse(
+                state["issue"], state_value(state["closed"]), state.get("comment")
             )
         if call.tool == "github_comment":
-            comment = state["comment"]
-            return Inverse(
-                kind="github.delete_comment",
-                payload={
-                    "number": int(call.args["number"]),
-                    "comment": {"id": comment["id"], "body": (comment.get("body") or "")[:2000]},
-                },
-            )
+            return self._comment_inverse(int(call.args["number"]), state["comment"], None)
         if call.tool == "github_update_file":
-            return Inverse(
-                kind="github.restore_file",
-                payload={
-                    "path": state["path"],
-                    "branch": state["branch"],
-                    "before_sha": state["sha"],
-                    "before_text": state["text"],
-                    "agent_sha": state["agent_sha"],
-                    "agent_text": state["agent_text"],
-                    "commit_sha": state["commit_sha"],
-                },
-            )
+            return self._file_inverse(state)
         return None
+
+    @staticmethod
+    def _issue_hashes(
+        number: int, after: dict[str, Any] | None, comment: dict[str, Any] | None
+    ) -> dict[str, str]:
+        hashes = {f"github:issues/{number}/state": field_hash(after)} if after else {}
+        if comment:
+            hashes[f"github:comments/{comment['id']}"] = field_hash(comment.get("body") or "")
+        return hashes
+
+    @staticmethod
+    def _issue_inverse(
+        issue: dict[str, Any], after: dict[str, Any], comment: dict[str, Any] | None
+    ) -> Inverse:
+        return Inverse(
+            kind="github.reopen_issue",
+            payload={
+                "number": issue["number"],
+                "title": issue.get("title") or "",
+                "before": state_value(issue),
+                "after": after,
+                "comment": comment_ref(comment) if comment else None,
+            },
+        )
+
+    @staticmethod
+    def _comment_inverse(
+        number: int, comment: dict[str, Any] | None, lookup: dict[str, Any] | None
+    ) -> Inverse:
+        """Delete the agent's comment: by id, or (``lookup``) found by its body and time when
+        the POST got no answer."""
+        payload: dict[str, Any] = {
+            "number": number,
+            "comment": comment_ref(comment) if comment else None,
+        }
+        if lookup:
+            payload["lookup"] = lookup
+        return Inverse(kind="github.delete_comment", payload=payload)
+
+    @staticmethod
+    def _file_inverse(state: dict[str, Any]) -> Inverse:
+        return Inverse(
+            kind="github.restore_file",
+            payload={
+                "path": state["path"],
+                "branch": state["branch"],
+                "before_sha": state["sha"],
+                "before_text": state["text"],
+                "agent_sha": state["agent_sha"],
+                "agent_text": state["agent_text"],
+                "commit_sha": state["commit_sha"],
+            },
+        )
 
     # --- undo ---------------------------------------------------------------------------------
 
@@ -419,7 +507,7 @@ class GitHubAdapter(Adapter):
             if inverse.kind == "github.reopen_issue":
                 changes, todo = await self._plan_issue(action, inverse.payload)
             elif inverse.kind == "github.delete_comment":
-                changes, todo = await self._plan_comment(action, inverse.payload["comment"])
+                changes, todo = await self._plan_agent_comment(action, inverse.payload)
             elif inverse.kind == "github.restore_file":
                 changes, todo = await self._plan_file(action, inverse.payload)
             else:
@@ -464,11 +552,31 @@ class GitHubAdapter(Adapter):
             todo.append(
                 (f"{verb} #{number}", lambda: self._set_state(number, current, p["before"]))
             )
-        if p.get("comment"):
-            more, comment_todo = await self._plan_comment(action, p["comment"])
-            changes += more
-            todo += comment_todo
-        return changes, todo
+        more, comment_todo = await self._plan_agent_comment(action, p)
+        return changes + more, todo + comment_todo
+
+    async def _plan_agent_comment(
+        self, action: Action, p: dict[str, Any]
+    ) -> tuple[list[FieldChange], list[tuple[str, Any]]]:
+        """The comment an inverse names, or the one its ``lookup`` finds; nothing if neither."""
+        comment = p.get("comment")
+        if comment is None and p.get("lookup"):
+            comment = await self._find_comment(int(p["number"]), p["lookup"])
+        if comment is None:
+            return [], []
+        return await self._plan_comment(action, comment)
+
+    async def _find_comment(self, number: int, lookup: dict[str, Any]) -> dict[str, Any] | None:
+        """A comment on the issue with the agent's body, created within ``FIND_WINDOW`` of the
+        call: what a comment POST that got no answer left, if it landed."""
+        at = _when(lookup["at"])
+        since = (at - FIND_WINDOW).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for c in await self.client.paginate(f"issues/{number}/comments", {"since": since}):
+            created = c.get("created_at")
+            near = created is None or abs(_when(str(created)) - at) <= FIND_WINDOW
+            if near and field_hash(c.get("body") or "") == lookup["hash"]:
+                return {**comment_ref(c), "hash": lookup["hash"]}
+        return None
 
     async def _set_state(
         self, number: int, current: dict[str, Any], target: dict[str, Any]
@@ -496,7 +604,8 @@ class GitHubAdapter(Adapter):
         key = f"github:comments/{cid}"
         live = await self.client.get_or_none(f"issues/comments/{cid}")
         current = (live.get("body") or "") if live else None
-        ok = live is None or field_hash(current) == action.after_hashes.get(key)
+        agent_hash = action.after_hashes.get(key) or comment.get("hash")
+        ok = live is None or field_hash(current) == agent_hash
         change = FieldChange(
             field=key,
             before=None,
@@ -617,8 +726,11 @@ class GitHubAdapter(Adapter):
                 key = self.file_key(p["path"], p["branch"])
                 expected.setdefault(key, p["before_sha"] or MISSING)
                 files[key] = (p["path"], p["branch"])
-        if not expected:
-            return None
+        # A comment found by its body (its POST got no answer) is named only in its step.
+        for s in steps:
+            for c in s.changes:
+                if c.field.startswith("github:comments/"):
+                    expected.setdefault(c.field, MISSING)
         current = await self._current(expected, files)
         exp = act = 0
         for key, value in expected.items():

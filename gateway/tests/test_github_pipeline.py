@@ -24,6 +24,7 @@ from mulligan.models import (
     SessionMode,
     StepResult,
 )
+from mulligan.orchestrator.rewind import MAY_HAVE_LANDED
 from mulligan.services import Services, assemble
 from mulligan.settings import Settings
 from tests.github_fake import FakeGitHub
@@ -98,3 +99,30 @@ async def test_cleanup_session_rewinds_and_verifies(svc: Services, gh: FakeGitHu
     assert gh.files["docs/pricing.md"] == b"Widget: $49\n"
     action = await svc.store.get(kept.action_id)
     assert action is not None and action.status is ActionStatus.conflict
+
+
+async def test_comment_that_landed_without_an_answer_is_rewound(
+    svc: Services, gh: FakeGitHub
+) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    gh.lose.append("POST issues/1/comments")
+    out = await svc.gateway.call_tool(
+        session, "github_comment", {"number": 1, "body": "Pinging the owner."}
+    )
+    assert out.is_error and "may have landed" in out.summary
+    action = await svc.store.get(out.structured_content["action_id"])
+    assert action is not None and action.status is ActionStatus.failed
+    assert action.inverse is not None
+    (cid,) = gh.comments
+
+    plan = await svc.rewinder.create(RewindRequest(scope=RewindScope(session_id=session.id)))
+    (step,) = plan.steps
+    assert step.detail == f"{MAY_HAVE_LANDED}Delete comment {cid}"
+
+    job = await rewind(svc, session)
+    assert job.status is RewindJobStatus.completed, job
+    assert [s.result for s in job.steps] == [StepResult.restored]
+    assert job.verification["github"].ok is True
+    assert not gh.comments
+    action = await svc.store.get(action.id)
+    assert action is not None and action.status is ActionStatus.reverted

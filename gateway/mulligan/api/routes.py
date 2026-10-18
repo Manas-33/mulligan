@@ -108,12 +108,21 @@ async def get_action(svc: Svc, action_id: Annotated[str, Path(pattern=ACT_ID)]) 
     return action
 
 
+def requested_by(request: Request, label: str | None) -> str | None:
+    """Who asked for a rewind: the kind of token the request carried, never the body alone. A
+    label the caller gives is kept after it ("service:asi_one"), so only the dashboard's token
+    reads as "dashboard"."""
+    caller: str | None = getattr(request.state, "caller", None)
+    if caller is None or not label or label == caller:
+        return caller
+    return f"{caller}:{label}"
+
+
 @router.post("/rewind", responses={202: {"model": RewindJob}})
 async def create_rewind(
     svc: Svc, body: RewindRequest, request: Request, response: Response
 ) -> RewindJob:
-    if body.requested_by is None:
-        body = body.model_copy(update={"requested_by": getattr(request.state, "caller", None)})
+    body = body.model_copy(update={"requested_by": requested_by(request, body.requested_by)})
     try:
         job = await svc.rewinder.create(body)
     except RewindBusy as exc:

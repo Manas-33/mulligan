@@ -27,8 +27,14 @@ from mulligan.models import (
     SystemVerification,
 )
 
-# Statuses whose action changed something (or may still) and so belongs in a rewind.
-_UNDOABLE = {ActionStatus.executed, ActionStatus.held, ActionStatus.approved}
+# Statuses whose action changed something (or may still) and so belongs in a rewind. A step that
+# failed is tried again: adapters compare current values with the agent's before writing.
+_UNDOABLE = {
+    ActionStatus.executed,
+    ActionStatus.held,
+    ActionStatus.approved,
+    ActionStatus.revert_failed,
+}
 _AFTER_STEP = {
     StepResult.restored: ActionStatus.reverted,
     # A refund or a correction email offsets the effect; the step result says which it was.
@@ -48,12 +54,38 @@ SPAN_STATUS = {
 }
 
 
+MAY_HAVE_LANDED = "The call failed, but its change may have landed. "
+INTERRUPTED = "The revert was interrupted before its outcome was saved; rewind again to check it."
+
+
+def may_have_landed(action: Action) -> bool:
+    """A call that failed but kept an inverse (`WriteUncertain`): a rewind checks for its change.
+    It never ran to completion, so it has no executed_at whatever its status since."""
+    return action.executed_at is None and action.inverse is not None
+
+
+def undoable(action: Action) -> bool:
+    """Whether a rewind picks this action up."""
+    if action.reversibility.label is ReversibilityLabel.read_only:
+        return False
+    if action.status is ActionStatus.failed:
+        return may_have_landed(action)
+    return action.status in _UNDOABLE
+
+
 class RewindBusy(RuntimeError):
     pass
 
 
 class EmptyScope(ValueError):
     """A scope with no fields would select every action in the log."""
+
+
+def _flag(action: Action, step: RewindStep) -> RewindStep:
+    """A step for a call that may have landed says so."""
+    if not may_have_landed(action):
+        return step
+    return step.model_copy(update={"detail": MAY_HAVE_LANDED + (step.detail or "")})
 
 
 def _step(action: Action, result: StepResult, detail: str) -> RewindStep:
@@ -88,11 +120,22 @@ class Rewinder:
             newest_first=True,
             limit=None,
         )
-        return [
-            a
-            for a in actions
-            if a.status in _UNDOABLE and a.reversibility.label is not ReversibilityLabel.read_only
-        ]
+        return [a for a in actions if undoable(a)]
+
+    async def recover(self) -> list[Action]:
+        """Mark actions left ``reverting`` (the gateway stopped, or the log was unreachable, in
+        the middle of a revert) ``revert_failed``, so the next rewind tries them again. Only
+        while no rewind runs: until then, a ``reverting`` action may be in progress."""
+        recovered: list[Action] = []
+        for action in await self.store.list_by_status(ActionStatus.reverting):
+            if self.running:
+                break
+            action = action.model_copy(
+                update={"status": ActionStatus.revert_failed, "error": INTERRUPTED}
+            )
+            await self.store.save(action)
+            recovered.append(action)
+        return recovered
 
     async def plan_step(self, action: Action) -> RewindStep:
         if action.status in (ActionStatus.held, ActionStatus.approved):
@@ -102,7 +145,7 @@ class Rewinder:
         adapter = self.gateway.by_system.get(action.system)
         if adapter is None:
             return _step(action, StepResult.pending, f"No adapter for {action.system.value}.")
-        return await adapter.plan_revert(action)
+        return _flag(action, await adapter.plan_revert(action))
 
     async def expected(self, actions: list[Action]) -> dict[str, SystemVerification]:
         """Per system, the checksum just before the oldest action in scope ran."""
@@ -121,6 +164,8 @@ class Rewinder:
             raise EmptyScope("scope needs session_id, since or action_ids")
         if not request.dry_run and self.running:
             raise RewindBusy(f"rewind {self.running} is running")
+        if not self.running:
+            await self.recover()
         actions = await self.select(request)
         job = RewindJob(
             id=new_id("rwd"),
@@ -221,7 +266,7 @@ class Rewinder:
             step = await hold_manager.cancel(current)
             await self.store.drop_held_call(current.id)
             return step, await self.store.get(current.id) or current
-        if current.status is not ActionStatus.executed:
+        if not undoable(current):
             return _step(current, StepResult.skipped, f"Action is {current.status.value}."), current
         if current.system is System.upstream:
             return _step(current, StepResult.skipped, "Upstream calls can't be undone."), current
@@ -238,14 +283,26 @@ class Rewinder:
             except Exception as exc:  # noqa: BLE001 (a failed step doesn't stop the rewind)
                 sentry_sdk.capture_exception(exc)
                 step = _step(current, StepResult.failed, str(exc)[:500] or type(exc).__name__)
-        status = _AFTER_STEP.get(step.result, ActionStatus.executed)
+        step = _flag(current, step)
+        # Nothing undone: a call that failed stays failed, one that ran stays executed.
+        unchanged = ActionStatus.failed if may_have_landed(current) else ActionStatus.executed
+        status = _AFTER_STEP.get(step.result, unchanged)
         update: dict[str, object] = {"status": status}
         if status in (ActionStatus.reverted, ActionStatus.conflict):
             update["reverted_at"] = utcnow()
+            if current.status is ActionStatus.revert_failed and not may_have_landed(current):
+                update["error"] = None  # the earlier failed attempt's reason
         if status is ActionStatus.revert_failed:
             update["error"] = step.detail
         done = current.model_copy(update=update)
-        await self.store.save(done)
+        try:
+            await self.store.save(done)
+        except Exception as exc:  # noqa: BLE001 (never leave it reverting)
+            sentry_sdk.capture_exception(exc)
+            done = current.model_copy(
+                update={"status": ActionStatus.revert_failed, "error": INTERRUPTED}
+            )
+            await self.store.save(done)
         return step, done
 
     async def _verify(self, job: RewindJob, actions: list[Action]) -> RewindJob:

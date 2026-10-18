@@ -417,7 +417,7 @@ class PostgresAdapter(Adapter):
             return self._step(action, [], StepResult.skipped, "The action changed no rows.")
         oids = list(dict.fromkeys(a["table_oid"] for a in audit))
         tables = {o: await load_table(conn, o) for o in oids}
-        current = await self._current(conn, audit, tables)
+        current = await self._current(conn, audit, tables, lock=apply)
 
         changes: list[FieldChange] = []
         restore_cols: dict[int, list[str]] = {}  # audit id -> columns to put back (UPDATE)
@@ -499,9 +499,18 @@ class PostgresAdapter(Adapter):
         return self._step(action, changes, result, detail)
 
     async def _current(
-        self, conn: AsyncConnection[Any], audit: list[dict[str, Any]], tables: dict[int, Table]
+        self,
+        conn: AsyncConnection[Any],
+        audit: list[dict[str, Any]],
+        tables: dict[int, Table],
+        *,
+        lock: bool = False,
     ) -> dict[int, tuple[dict[str, Any] | None, dict[str, str]]]:
-        """For each audit row: the live row (canonical) and the hash of each of its columns."""
+        """For each audit row: the live row (canonical) and the hash of each of its columns.
+
+        ``lock`` (a revert, inside its transaction) takes a row lock on each live row, so a
+        person's edit can't land between this check and the revert's write and be overwritten:
+        their update waits for the revert, or the revert reads it if it committed first."""
         out: dict[int, tuple[dict[str, Any] | None, dict[str, str]]] = {}
         by_table: dict[int, list[int]] = defaultdict(list)
         for a in audit:
@@ -517,10 +526,14 @@ class PostgresAdapter(Adapter):
                   LEFT JOIN LATERAL (
                        SELECT mulligan_audit.canon_row(tgt) AS j FROM {t} AS tgt
                         CROSS JOIN LATERAL jsonb_populate_record(NULL::{t}, a.pk) AS w
-                        WHERE {m}) AS cur ON true
+                        WHERE {m} {lock}) AS cur ON true
                  WHERE a.id = ANY(%s)
                 """
-            ).format(t=t.ident, m=t.pk_match("tgt", "w"))
+            ).format(
+                t=t.ident,
+                m=t.pk_match("tgt", "w"),
+                lock=sql.SQL("FOR UPDATE OF tgt" if lock else ""),
+            )
             cur = await conn.execute(q, [ids])
             for r in await cur.fetchall():
                 row: Any = r

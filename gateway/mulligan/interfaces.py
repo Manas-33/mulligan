@@ -90,6 +90,29 @@ class Capture(BaseModel):
     state: dict[str, Any] = Field(default_factory=dict)
 
 
+class WriteUncertain(Exception):
+    """Raised by ``Adapter.execute`` when a write went out but no answer came back (the
+    connection failed, or the server answered 5xx), so it may or may not have landed.
+
+    The core logs the action ``failed`` but keeps ``inverse`` and ``after_hashes``, built from
+    what the call meant to write. A rewind picks the action up and the adapter's usual conflict
+    check decides whether there is anything to undo. Nothing is sent again.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        before_ref: str | None,
+        inverse: Inverse,
+        after_hashes: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.before_ref = before_ref
+        self.inverse = inverse
+        self.after_hashes = after_hashes or {}
+
+
 class Adapter(ABC):
     """Executes and undoes the calls for one system.
 
@@ -107,7 +130,8 @@ class Adapter(ABC):
 
     @abstractmethod
     async def execute(self, call: ToolCall, before: Capture) -> ToolResult:
-        """Run the call against the real system. Raise to fail it."""
+        """Run the call against the real system. Raise to fail it, or raise ``WriteUncertain``
+        if a write may have landed before the error."""
 
     @abstractmethod
     async def capture_after(self, call: ToolCall, before: Capture, result: ToolResult) -> Capture:

@@ -135,4 +135,7 @@ async def build_services(settings: Settings, adapters: list[Adapter]) -> Service
     if applied:
         log.info("applied migrations: %s", ", ".join(applied))
     store = LogStore(pool)
-    return assemble(settings, store, EventBus(pool), adapters, pool=pool)
+    services = assemble(settings, store, EventBus(pool), adapters, pool=pool)
+    if recovered := await services.rewinder.recover():
+        log.warning("%d actions were left mid-revert; marked revert_failed", len(recovered))
+    return services
