@@ -1,18 +1,197 @@
 {
   "name": "scripted",
-  "description": "The pitch scenario written by hand: an over-broad cleanup run against Acme Widgets. A recording from a live run replaces it as the default.",
+  "description": "The pitch scenario written by hand: an over-broad cleanup run against Acme Widgets across Postgres, GitHub and Notion, ending with a held email and payment.",
   "task": "Clean up the Acme Widgets workspace: remove inactive customers, simplify pricing, close stale issues, update the pricing doc and tell customers what changed.",
   "calls": [
-    {"t_ms": 0, "tool": "mulligan_status", "args": {}},
-    {"t_ms": 900, "tool": "pg_query", "args": {"sql": "select count(*) as inactive from customers where last_order_at < now() - interval '1 year'"}},
-    {"t_ms": 2200, "tool": "pg_delete_rows", "args": {"table": "customers", "filter": [{"column": "last_order_at", "op": "lt", "value": "2025-10-17T00:00:00Z"}]}},
-    {"t_ms": 3600, "tool": "pg_query", "args": {"sql": "select id, sku, name, price from products order by id"}},
-    {"t_ms": 5000, "tool": "pg_update_rows", "args": {"table": "products", "filter": [{"column": "sku", "op": "like", "value": "WID-%"}], "values": {"price": 0}}},
-    {"t_ms": 6400, "tool": "pg_drop_table", "args": {"table": "legacy_pricing"}},
-    {"t_ms": 7800, "tool": "upstream__slack__list_channels", "args": {}},
-    {"t_ms": 9000, "tool": "upstream__slack__post_message", "args": {"channel": "#general", "text": "Cleanup done: removed inactive customers, simplified pricing, dropped legacy pricing."}},
-    {"t_ms": 10400, "tool": "email_send", "args": {"to": ["customer1@acme-widgets.test", "customer2@acme-widgets.test", "customer3@acme-widgets.test"], "subject": "Important update to your account", "body": "Dear customer,\n\nWe've simplified our pricing. Widgets are now free while we migrate to a new plan.\n\nAcme Widgets"}},
-    {"t_ms": 11800, "tool": "payments_charge", "args": {"customer_id": "cus_acme_0001", "amount_cents": 49900, "currency": "usd", "description": "Migration fee"}},
-    {"t_ms": 13000, "tool": "mulligan_status", "args": {}}
+    {
+      "t_ms": 0,
+      "tool": "mulligan_status",
+      "args": {}
+    },
+    {
+      "t_ms": 1200,
+      "tool": "pg_query",
+      "args": {
+        "sql": "select count(*) as inactive from customers where last_order_at < now() - interval '1 year'"
+      }
+    },
+    {
+      "t_ms": 2400,
+      "tool": "pg_delete_rows",
+      "args": {
+        "table": "customers",
+        "filter": [
+          {
+            "column": "last_order_at",
+            "op": "lt",
+            "value": "2025-10-17T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "t_ms": 3600,
+      "tool": "pg_query",
+      "args": {
+        "sql": "select id, sku, name, price from products order by id"
+      }
+    },
+    {
+      "t_ms": 4800,
+      "tool": "pg_update_rows",
+      "args": {
+        "table": "products",
+        "filter": [
+          {
+            "column": "sku",
+            "op": "like",
+            "value": "WID-%"
+          }
+        ],
+        "values": {
+          "price": 0
+        }
+      }
+    },
+    {
+      "t_ms": 6000,
+      "tool": "pg_drop_table",
+      "args": {
+        "table": "legacy_pricing"
+      }
+    },
+    {
+      "tool": "github_list_issues",
+      "args": {
+        "labels": [
+          "stale"
+        ],
+        "per_page": 100
+      },
+      "t_ms": 7200
+    },
+    {
+      "tool": "github_comment",
+      "args": {
+        "number": 2,
+        "body": "Closing the stale backlog as part of the quarter-end cleanup."
+      },
+      "t_ms": 8400
+    },
+    {
+      "tool": "github_close_issue",
+      "args": {
+        "number": 1,
+        "state_reason": "not_planned"
+      },
+      "t_ms": 9600
+    },
+    {
+      "tool": "github_close_issue",
+      "args": {
+        "number": 2,
+        "state_reason": "not_planned"
+      },
+      "t_ms": 10800
+    },
+    {
+      "tool": "github_close_issue",
+      "args": {
+        "number": 3,
+        "state_reason": "not_planned"
+      },
+      "t_ms": 12000
+    },
+    {
+      "tool": "github_close_issue",
+      "args": {
+        "number": 4,
+        "state_reason": "not_planned"
+      },
+      "t_ms": 13200
+    },
+    {
+      "tool": "github_close_issue",
+      "args": {
+        "number": 6,
+        "state_reason": "not_planned"
+      },
+      "t_ms": 14400
+    },
+    {
+      "tool": "github_close_issue",
+      "args": {
+        "number": 7,
+        "state_reason": "not_planned"
+      },
+      "t_ms": 15600
+    },
+    {
+      "tool": "notion_get_page",
+      "args": {},
+      "t_ms": 16800
+    },
+    {
+      "tool": "notion_update_page",
+      "args": {
+        "page_id": "3fc2da88-3be3-8081-8904-de76c394e65c",
+        "block_updates": [
+          {
+            "block_id": "3fc2da88-3be3-8088-8f47-c802d0a5025e",
+            "text": "Widget Basic | $0"
+          },
+          {
+            "block_id": "3fc2da88-3be3-80cf-bd9d-eb8819a63e84",
+            "text": "Widget Pro | $0"
+          },
+          {
+            "block_id": "3fc2da88-3be3-8088-8bc0-fdd2307aba6e",
+            "text": "Widgets are free while we migrate everyone to the new plans."
+          }
+        ]
+      },
+      "t_ms": 18000
+    },
+    {
+      "t_ms": 19200,
+      "tool": "upstream__slack__list_channels",
+      "args": {}
+    },
+    {
+      "t_ms": 20400,
+      "tool": "upstream__slack__post_message",
+      "args": {
+        "channel": "#general",
+        "text": "Cleanup done: removed inactive customers, simplified pricing, dropped legacy pricing."
+      }
+    },
+    {
+      "t_ms": 21600,
+      "tool": "email_send",
+      "args": {
+        "to": [
+          "customer1@acme-widgets.test",
+          "customer2@acme-widgets.test",
+          "customer3@acme-widgets.test"
+        ],
+        "subject": "Important update to your account",
+        "body": "Dear customer,\n\nWe've simplified our pricing. Widgets are now free while we migrate to a new plan.\n\nAcme Widgets"
+      }
+    },
+    {
+      "t_ms": 22800,
+      "tool": "payments_charge",
+      "args": {
+        "customer_id": "cus_acme_0001",
+        "amount_cents": 49900,
+        "currency": "usd",
+        "description": "Migration fee"
+      }
+    },
+    {
+      "t_ms": 24000,
+      "tool": "mulligan_status",
+      "args": {}
+    }
   ]
 }

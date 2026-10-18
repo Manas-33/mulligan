@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from mulligan.app import create_app
@@ -104,3 +106,23 @@ def test_a_payment_hold_must_capture_before_the_authorization_lapses() -> None:
     )
     with pytest.raises(HoldWindowError):
         check_hold_window(late)
+
+
+def test_a_comment_where_a_value_should_be_counts_as_unset(tmp_path: Path) -> None:
+    from mulligan.settings import load_dotenv
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "UPSTREAM_MCP_SERVERS=   # e.g. slack=http://x/mcp\nMULLIGAN_DEMO=1  # on\n"
+    )
+    assert load_dotenv(env_file) == {"UPSTREAM_MCP_SERVERS": "", "MULLIGAN_DEMO": "1"}
+    settings = Settings.from_env(
+        {
+            "UPSTREAM_MCP_SERVERS": "# e.g. slack",
+            "MULLIGAN_MCP_PUBLIC_URL": "#",
+            "MULLIGAN_DEMO": "1",
+        }
+    )
+    assert settings.upstream_mcp_servers == ""
+    assert settings.mcp_public_url == ""
+    assert settings.demo is True
