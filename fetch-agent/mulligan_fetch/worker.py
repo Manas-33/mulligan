@@ -12,6 +12,7 @@ from mulligan_fetch.messages import TaskRequest, TaskResult
 from mulligan_fetch.tasks import run_through_mulligan
 
 config = Config.from_env()
+config.check_seeds()
 
 worker = Agent(
     name="mulligan-worker",

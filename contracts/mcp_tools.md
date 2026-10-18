@@ -90,7 +90,7 @@ All tools act on `GITHUB_ORG/GITHUB_REPO` only.
 | Tool | Input | Result | Label | Hold |
 |---|---|---|---|---|
 | `email_send` | `{to: email[] (1..1000), subject, body: string, cc?: email[]}` | `{action_id, status: "held"}` | irreversible | `email_outbox` |
-| `payments_charge` | `{customer_id: string, amount_cents: int (1..100000), currency?: string = "usd", description: string}` | `{action_id, status: "held"}` | compensable | `payment_auth` |
+| `payments_charge` | `{customer_id: string, amount_cents: int (1..100000), currency?: one of usd, eur, gbp, cad, aud (two-decimal only) = "usd", description: string}` | `{action_id, status: "held"}` | compensable | `payment_auth` |
 
 - Both are Stream B's adapters in `gateway/mulligan/holds/` (systems `email` and `payments`). A rewind sends an action that hasn't run yet (held or approved) to `HoldManager.cancel`, and one that ran to the adapter's `revert`, like any other system.
 - Email waits in an outbox until someone approves it, then sends. A rewind before sending cancels it (`email.cancel_outbox`, `restored`). After sending it is `skipped`, or `compensated` if the adapter sends a correction email (`email.send_correction`).
