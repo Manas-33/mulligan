@@ -63,3 +63,44 @@ def test_cors_preflight_passes_and_401_carries_cors_headers() -> None:
     denied = c.get("/api/sessions", headers=origin)
     assert denied.status_code == 401
     assert denied.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_a_payment_hold_must_capture_before_the_authorization_lapses() -> None:
+    import pytest
+
+    from mulligan.log.store import HoldWindowError, check_hold_window
+    from mulligan.models import Action
+
+    base = {
+        "id": "act_01M561R8XR9B8FKFRNVHR3M4C9",
+        "session_id": "ses_01M561Q6R04CJZXHXRCFFNM7C4",
+        "agent": {"id": "c", "kind": "claude_code", "display_name": "C"},
+        "system": "payments",
+        "tool": "payments_charge",
+        "upstream_server": None,
+        "args_redacted": {},
+        "status": "executed",
+        "reversibility": {"label": "compensable", "source": "policy", "reason": None},
+        "summary": None,
+        "error": None,
+        "before_ref": None,
+        "after_ref": None,
+        "after_hashes": {},
+        "inverse": None,
+        "approval": None,
+        "explanation": None,
+        "sentry_trace_id": None,
+        "created_at": "2026-10-17T23:00:00Z",
+        "executed_at": None,
+        "reverted_at": None,
+    }
+    hold = {"kind": "payment_auth", "external_id": "pi_1", "release_at": "2026-10-18T00:00:00Z"}
+    ok = Action.model_validate(
+        {**base, "hold": {**hold, "authorization_expires_at": "2026-10-24T00:00:00Z"}}
+    )
+    check_hold_window(ok)
+    late = Action.model_validate(
+        {**base, "hold": {**hold, "authorization_expires_at": "2026-10-17T23:30:00Z"}}
+    )
+    with pytest.raises(HoldWindowError):
+        check_hold_window(late)

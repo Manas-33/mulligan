@@ -246,7 +246,7 @@ components:
           decided_at: null
           decided_by: null
           decision: null
-        hold: { kind: email_outbox, release_at: null, external_id: "outbox_17" }
+        hold: { kind: email_outbox, release_at: null, authorization_expires_at: null, external_id: "outbox_17" }
         explanation: null
         sentry_trace_id: 7d2a3b4c5d6e4f708192a3b4c5d6e7f8
         created_at: "2026-10-17T23:04:28Z"
@@ -281,7 +281,7 @@ components:
           decided_at: "2026-10-17T23:05:02Z"
           decided_by: "imessage:+15555550123"
           decision: approve
-        hold: { kind: email_outbox, release_at: null, external_id: "outbox_17" }
+        hold: { kind: email_outbox, release_at: null, authorization_expires_at: null, external_id: "outbox_17" }
         explanation: null
         sentry_trace_id: 7d2a3b4c5d6e4f708192a3b4c5d6e7f8
         created_at: "2026-10-17T23:04:28Z"
@@ -682,7 +682,8 @@ paths:
       operationId: decideApproval
       summary: Approve or reject a held action
       description: |
-        Called by the Photon service when a reply like `YES 4821` arrives (channel imessage), or by the dashboard (channel dashboard).
+        Called by the Photon service when a reply like `YES 4821` arrives (channel imessage), by the dashboard
+        (channel dashboard), or by the Guardian agent when someone uses its review card in ASI:One (channel asi_one).
         The code must match the action's approval code. Returns the action with its new status:
         `approved` (then `executing`, `executed` as the hold releases) or `rejected`.
       parameters:
