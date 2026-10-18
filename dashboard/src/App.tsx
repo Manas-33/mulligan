@@ -11,21 +11,22 @@ import { Rewind } from "./components/Rewind.tsx";
 import { Logo } from "./components/SystemObject.tsx";
 import { API_URL, DASHBOARD_TOKEN } from "./config.ts";
 import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
-import type { RewindJob } from "./types.ts";
-import { shortId } from "./view.ts";
+import type { Action, RewindJob } from "./types.ts";
+import { shortId, UNDOABLE } from "./view.ts";
 
 const client = createClient({ baseUrl: API_URL, token: DASHBOARD_TOKEN });
 
 type Conn = "connecting" | "live" | "reconnecting" | "error";
 
-const UNDOABLE = new Set(["executed", "held", "approved", "conflict"]);
+/** What a rewind covers: the whole round, or back to (and including) one action. */
+type Target = { from?: Action };
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, empty);
   const [conn, setConn] = useState<Conn>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [rewinding, setRewinding] = useState(false);
+  const [rewinding, setRewinding] = useState<Target | null>(null);
 
   useEffect(() => {
     const stop = new AbortController();
@@ -66,7 +67,7 @@ export function App() {
               value={current ?? ""}
               onChange={(e) => {
                 setSelected(e.target.value);
-                setRewinding(false);
+                setRewinding(null);
               }}
             >
               {sessions.map((s) => (
@@ -103,15 +104,16 @@ export function App() {
           client={client}
           session={session}
           actions={state.actions}
+          from={rewinding.from}
           live={latestRewind(state, session.id)}
           onJob={onJob}
-          onClose={() => setRewinding(false)}
+          onClose={() => setRewinding(null)}
         />
       ) : (
         <>
-          <Hero session={session} actions={actions} canRewind={canRewind} onRewind={() => setRewinding(true)} />
+          <Hero session={session} actions={actions} canRewind={canRewind} onRewind={() => setRewinding({})} />
           <div className="body">
-            <Course session={session} actions={actions} />
+            <Course session={session} actions={actions} onRewindTo={(from) => setRewinding({ from })} />
             <Holds client={client} held={held} />
           </div>
         </>

@@ -12,6 +12,7 @@ import {
   showValue,
   stepKind,
   timeLeft,
+  undoableFrom,
 } from "../src/view.ts";
 
 const step = (over: Partial<RewindStep>): RewindStep => ({
@@ -110,5 +111,19 @@ describe("formatting", () => {
   it("captions a lane by what happened", () => {
     expect(laneCaption("postgres", [action({}), action({}), action({ status: "held" })])).toBe("2 writes · 1 held");
     expect(laneCaption("email", [action({ status: "held" })])).toBe("1 held");
+  });
+});
+
+describe("undoableFrom", () => {
+  it("takes the action itself and everything after it that can still be undone", () => {
+    const at = (id: string, created_at: string, status: Action["status"] = "executed") => action({ id, created_at, status });
+    const list = [
+      at("a4", "2026-10-17T23:04:35Z", "held"),
+      at("a3", "2026-10-17T23:04:21Z", "reverted"),
+      at("a2", "2026-10-17T23:04:14Z"),
+      at("a1", "2026-10-17T23:04:07Z"),
+    ];
+    expect(undoableFrom(list, "2026-10-17T23:04:14Z").map((a) => a.id)).toEqual(["a4", "a2"]);
+    expect(undoableFrom(list, "2026-10-17T23:05:00Z")).toEqual([]);
   });
 });
