@@ -86,7 +86,7 @@ mock-slack: ## Mock Slack MCP server on 127.0.0.1:8200 (UPSTREAM_MCP_SERVERS=sla
 	$(UV) run python ../demo/upstream/slack_server.py
 
 .PHONY: ci
-ci: types-check lint-contracts lint typecheck test photon-check dashboard-check ## Everything CI runs
+ci: types-check lint-contracts lint typecheck test photon-check dashboard-check fetch-check ## Everything CI runs
 
 # --- Stream B: Photon service and dashboard ---------------------------------
 
@@ -166,6 +166,24 @@ check-exposure: ## Every route needs a token, MCP port serves only /mcp, tunnel 
 .PHONY: load-check
 load-check: ## 200 actions in one session, rewind under 30 s, checksum restored
 	$(UV) run python ../demo/scripts/load_check.py
+
+.PHONY: fetch-setup
+fetch-setup: ## Install the Fetch agents' deps (uv)
+	uv --directory fetch-agent sync
+
+.PHONY: fetch-check
+fetch-check: ## Lint and unit-test the Fetch agents
+	uv --directory fetch-agent run ruff check .
+	uv --directory fetch-agent run ruff format --check .
+	uv --directory fetch-agent run pytest
+
+.PHONY: fetch-worker
+fetch-worker: ## Run the Fetch worker agent (port 8011)
+	uv --directory fetch-agent run python -m mulligan_fetch.worker
+
+.PHONY: fetch-guardian
+fetch-guardian: ## Run the Fetch Guardian agent for ASI:One (port 8010, mailbox)
+	uv --directory fetch-agent run python -m mulligan_fetch.guardian
 
 .PHONY: tunnel
 tunnel: ## Public HTTPS URL for the MCP port only (cloudflared quick tunnel, for Devin)
