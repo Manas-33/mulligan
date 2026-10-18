@@ -382,7 +382,11 @@ def add_passthrough(mcp: MCPServer, schema: UpstreamToolSchema, run: Any) -> Non
 
 def allowed_host(host: str, public_host: str) -> bool:
     name = host.rsplit(":", 1)[0] if not host.endswith("]") else host
-    return name in LOCAL_HOSTS or name == public_host or name.endswith(TUNNEL_SUFFIX)
+    return (
+        name in LOCAL_HOSTS
+        or (bool(public_host) and name == public_host)
+        or name.endswith(TUNNEL_SUFFIX)
+    )
 
 
 class HostCheck:

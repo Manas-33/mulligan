@@ -59,6 +59,8 @@ def build_where(
             parts.append(sql.SQL(tmpl).format(c, arr))
             params.append(Jsonb(f["value"]))
         elif op in ("like", "ilike"):
+            if not isinstance(f.get("value"), str):
+                raise ToolError(f"{op} needs a string pattern")
             parts.append(sql.SQL("{}::text {} %s::text").format(c, sql.SQL(op.upper())))
             params.append(str(f.get("value")))
         elif op in ("is_null", "is_not_null"):
