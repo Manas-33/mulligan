@@ -124,6 +124,33 @@ class PostgresAdapter(Adapter):
         await self.pool.close()
         await self.ro_pool.close()
 
+    async def reset(self) -> None:
+        """Demo only: drop the company's tables (and anything in the trash), clear the audit log,
+        reseed from demo/seed/prod.sql and re-attach the audit trigger. Needs the admin URL."""
+        if not self.settings.prod_db_admin_url:
+            raise RuntimeError("PROD_DB_ADMIN_URL is not set, so prod-db can't be reset")
+        seed = (self.settings.seed_dir / "prod.sql").read_text()  # noqa: ASYNC240
+        async with await AsyncConnection.connect(
+            self.settings.prod_db_admin_url, autocommit=True
+        ) as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    """
+                    SELECT format('%%I.%%I', n.nspname, c.relname) AS t
+                      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE n.nspname = ANY(%s) AND c.relkind IN ('r', 'p')
+                    """,
+                    [[*self.schemas, "mulligan_trash"]],
+                )
+                for row in await cur.fetchall():
+                    await conn.execute(
+                        sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(sql.SQL(row[0]))
+                    )
+                await conn.execute("TRUNCATE mulligan_audit.audit_log")
+                await conn.execute(seed)
+                for schema in self.schemas:
+                    await conn.execute("SELECT mulligan_audit.enable_schema(%s)", [schema])
+
     # --- executing ----------------------------------------------------------------------------
 
     async def capture_before(self, call: ToolCall) -> Capture:
@@ -230,7 +257,9 @@ class PostgresAdapter(Adapter):
                 await conn.execute(
                     "SELECT set_config('mulligan.action_id', %s, true)", [call.action_id]
                 )
+                row_sum = await self._table_sum(conn, t)
                 payload = await soft_drop(conn, t, call.action_id)
+                payload["row_hash_sum"] = f"{row_sum:064x}"
         before.state.update({"after_hashes": {f"postgres:{t.path}": ABSENT}, "undrop": payload})
         fks = payload["inbound_fks"]
         summary = f"Dropped table {t.name}"
@@ -538,83 +567,153 @@ class PostgresAdapter(Adapter):
         total = 0
         async with self.pool.connection() as conn:
             for t in await self._tables(conn):
-                q = sql.SQL(
-                    "SELECT mulligan_audit.field_hash(jsonb_build_array(%s::text,"
-                    " mulligan_audit.canon_row(tgt))) AS h FROM {t} AS tgt"
-                ).format(t=t.ident)
-                cur = await conn.execute(q, [t.path])
-                rows: list[Any] = await cur.fetchall()
-                for r in rows:
-                    total = (total + int(r["h"], 16)) % MOD
+                total = (total + await self._table_sum(conn, t)) % MOD
         return f"{total:064x}"
 
-    async def expected_checksum(self, pre: str, steps: list[RewindStep]) -> str:
-        """`pre` with every row a human kept swapped in: for a row that existed before the
-        session, its pre-session form with the kept columns (or, if a human reused its key,
-        the whole current row); for a row the agent inserted and a human edited, the row."""
-        kept_rows: dict[str, set[str] | None] = {}  # row key -> kept columns (None: whole row)
-        for step in steps:
-            for change in step.changes:
-                if change.outcome is not FieldChangeOutcome.keep_human_edit:
-                    continue
-                parts = change.field.split("/")
-                if len(parts) == 2:
-                    kept_rows[change.field] = None
-                elif len(parts) == 3:
-                    row_key = "/".join(parts[:2])
-                    cols = kept_rows.setdefault(row_key, set())
-                    if cols is not None:
-                        cols.add(parts[2])
-        if not kept_rows:
-            return pre
-        total = int(pre, 16)
+    async def _table_sum(
+        self, conn: AsyncConnection[Any], t: Table, path: str | None = None
+    ) -> int:
+        q = sql.SQL(
+            "SELECT mulligan_audit.field_hash(jsonb_build_array(%s::text,"
+            " mulligan_audit.canon_row(tgt))) AS h FROM {t} AS tgt"
+        ).format(t=t.ident)
+        cur = await conn.execute(q, [path or t.path])
+        rows: list[Any] = await cur.fetchall()
+        return sum(int(r["h"], 16) for r in rows) % MOD
+
+    async def verify_scope(
+        self, actions: list[Action], steps: list[RewindStep]
+    ) -> tuple[str, str] | None:
+        """(expected, actual) over exactly what the rewound actions touched, so edits people made
+        elsewhere don't count against the rewind. Every row in the actions' audit log should be
+        back in its pre-session form (with kept human edits on top), and every table they dropped
+        should hold the rows it had when it was dropped."""
+        ids = [a.id for a in actions]
+        kept = _kept_rows(steps)
+        expected = actual = 0
         async with self.pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT * FROM mulligan_audit.audit_log WHERE action_id = ANY(%s) ORDER BY id",
-                [[s.action_id for s in steps]],
+                [ids],
             )
             audit: list[Any] = await cur.fetchall()
             tables: dict[int, Table] = {}
             first: dict[str, Any] = {}
+            changed: dict[str, set[str]] = defaultdict(set)
             for a in audit:
                 if a["table_oid"] not in tables:
                     tables[a["table_oid"]] = await load_table(conn, a["table_oid"])
-                first.setdefault(tables[a["table_oid"]].row_key(a["pk"]), a)
-            for row_key, cols in kept_rows.items():
-                a = first.get(row_key)
-                if a is None:
+                key = tables[a["table_oid"]].row_key(a["pk"])
+                first.setdefault(key, a)
+                changed[key].update(a["changed"] or [])
+            for row_key, a in first.items():
+                cols = kept.get(row_key)
+                if a["op"] == "UPDATE":
+                    # Columns the session changed go back to their old values unless a human
+                    # kept them; columns it never touched are whatever people left there.
+                    restore = changed[row_key] - (cols or set())
+                    h = await self._row_hashes(conn, tables[a["table_oid"]], a, restore)
+                    actual += h["cur"]
+                    if row_key in kept and cols is None:
+                        expected += h["cur"]
+                    elif not h["gone"]:
+                        expected += h["upd"]
                     continue
-                t = tables[a["table_oid"]]
-                q = sql.SQL(
-                    """
-                    SELECT mulligan_audit.field_hash(jsonb_build_array(%(p)s::text, a.old_row)) AS pre,
-                           mulligan_audit.field_hash(jsonb_build_array(%(p)s::text, cur.j)) AS cur,
-                           mulligan_audit.field_hash(jsonb_build_array(%(p)s::text,
-                             a.old_row || coalesce((SELECT jsonb_object_agg(k, cur.j -> k)
-                                                      FROM unnest(%(cols)s::text[]) AS k), '{{}}'))) AS mix,
-                           cur.j IS NULL AS gone
-                      FROM mulligan_audit.audit_log a
-                      LEFT JOIN LATERAL (
-                           SELECT mulligan_audit.canon_row(tgt) AS j FROM {t} AS tgt
-                            CROSS JOIN LATERAL jsonb_populate_record(NULL::{t}, a.pk) AS w
-                            WHERE {m}) AS cur ON true
-                     WHERE a.id = %(id)s
-                    """
-                ).format(t=t.ident, m=t.pk_match("tgt", "w"))
-                cur = await conn.execute(
-                    q, {"p": t.path, "cols": sorted(cols or []), "id": a["id"]}
-                )
-                h: Any = await cur.fetchone()
-                existed = a["op"] != "INSERT"
-                minus = int(h["pre"], 16) if existed else 0
-                if h["gone"]:
-                    plus = 0
-                elif cols is None or not existed:
-                    plus = int(h["cur"], 16)
-                else:
-                    plus = int(h["mix"], 16)
-                total = (total - minus + plus) % MOD
-        return f"{total:064x}"
+                h = await self._row_hashes(conn, tables[a["table_oid"]], a, set())
+                actual += h["cur"]
+                if row_key in kept:
+                    expected += h["cur"]
+                elif a["op"] == "DELETE":
+                    expected += h["pre"]
+            created = {a.id: a.created_at for a in actions}
+            for action in actions:
+                if action.inverse is None or action.inverse.kind != "postgres.undrop_table":
+                    continue
+                p = action.inverse.payload
+                if "row_hash_sum" not in p:
+                    return None
+                path = seg(p["name"] if p["schema"] == "public" else f"{p['schema']}.{p['name']}")
+                expected += int(p["row_hash_sum"], 16)
+                # Rows of this table the session also wrote are already counted above: take
+                # their drop-time form out of the expected side and their current form out of
+                # the actual side.
+                for row_key, a in first.items():
+                    if a["table_oid"] != p["table_oid"]:
+                        continue
+                    before_drop = [
+                        r
+                        for r in audit
+                        if r["table_oid"] == p["table_oid"]
+                        and tables[r["table_oid"]].row_key(r["pk"]) == row_key
+                        and created.get(r["action_id"], action.created_at) < action.created_at
+                    ]
+                    if before_drop and before_drop[-1]["op"] != "DELETE":
+                        expected -= await self._audit_hash(conn, path, before_drop[-1]["id"])
+                    h = await self._row_hashes(conn, tables[a["table_oid"]], a, None)
+                    actual -= h["cur"]
+                try:
+                    t = await load_table(conn, p["table_oid"])
+                except UndoError:
+                    continue
+                if t.schema == p["schema"]:
+                    actual += await self._table_sum(conn, t, path)
+        return f"{expected % MOD:064x}", f"{actual % MOD:064x}"
+
+    async def _audit_hash(self, conn: AsyncConnection[Any], path: str, audit_id: int) -> int:
+        cur = await conn.execute(
+            "SELECT mulligan_audit.field_hash(jsonb_build_array(%s::text, new_row)) AS h"
+            " FROM mulligan_audit.audit_log WHERE id = %s",
+            [path, audit_id],
+        )
+        row: Any = await cur.fetchone()
+        return int(row["h"], 16)
+
+    async def _row_hashes(
+        self, conn: AsyncConnection[Any], t: Table, a: dict[str, Any], cols: set[str] | None
+    ) -> dict[str, Any]:
+        """pre: the audit row's old form. cur: the live row (0 if gone). upd: the live row with
+        `cols` put back to their old values."""
+        q = sql.SQL(
+            """
+            SELECT mulligan_audit.field_hash(jsonb_build_array(%(p)s::text, a.old_row)) AS pre,
+                   mulligan_audit.field_hash(jsonb_build_array(%(p)s::text, cur.j)) AS cur,
+                   mulligan_audit.field_hash(jsonb_build_array(%(p)s::text,
+                     cur.j || coalesce((SELECT jsonb_object_agg(k, a.old_row -> k)
+                                          FROM unnest(%(cols)s::text[]) AS k), '{{}}'))) AS upd,
+                   cur.j IS NULL AS gone
+              FROM mulligan_audit.audit_log a
+              LEFT JOIN LATERAL (
+                   SELECT mulligan_audit.canon_row(tgt) AS j FROM {t} AS tgt
+                    CROSS JOIN LATERAL jsonb_populate_record(NULL::{t}, a.pk) AS w
+                    WHERE {m}) AS cur ON true
+             WHERE a.id = %(id)s
+            """
+        ).format(t=t.ident, m=t.pk_match("tgt", "w"))
+        cur = await conn.execute(q, {"p": t.path, "cols": sorted(cols or []), "id": a["id"]})
+        h: Any = await cur.fetchone()
+        return {
+            "pre": int(h["pre"], 16) if a["op"] != "INSERT" else 0,
+            "cur": 0 if h["gone"] else int(h["cur"], 16),
+            "upd": int(h["upd"], 16),
+            "gone": h["gone"],
+        }
+
+
+def _kept_rows(steps: list[RewindStep]) -> dict[str, set[str] | None]:
+    """Row key -> the columns a human kept (None: the whole row)."""
+    kept: dict[str, set[str] | None] = {}
+    for step in steps:
+        for change in step.changes:
+            if change.outcome is not FieldChangeOutcome.keep_human_edit:
+                continue
+            parts = change.field.split("/")
+            if len(parts) == 2:
+                kept[change.field] = None
+            elif len(parts) == 3:
+                cols = kept.setdefault("/".join(parts[:2]), set())
+                if cols is not None:
+                    cols.add(parts[2])
+    return kept
 
 
 def _outcome(ok: bool) -> FieldChangeOutcome:

@@ -11,6 +11,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY gateway/ ./
 COPY contracts/ /app/contracts/
+COPY demo/seed/ /app/demo/seed/
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000 8001

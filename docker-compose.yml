@@ -64,6 +64,8 @@ services:
       MULLIGAN_DB_URL: postgresql://mulligan:mulligan@mulligan-db:5432/mulligan
       PROD_DB_URL: postgresql://mulligan_gw:mulligan_gw@prod-db:5432/acme
       PROD_DB_READONLY_URL: postgresql://mulligan_ro:mulligan_ro@prod-db:5432/acme
+      PROD_DB_ADMIN_URL: postgresql://acme:acme@prod-db:5432/acme   # demo reset only
+      MULLIGAN_SEED_DIR: /app/demo/seed
       PHOTON_SERVICE_URL: http://approvals-photon:8100
       MULLIGAN_POLICY_PATH: /app/contracts/reversibility_policy.yaml
     ports:

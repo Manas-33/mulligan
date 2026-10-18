@@ -1,0 +1,18 @@
+{
+  "name": "scripted",
+  "description": "The pitch scenario written by hand: an over-broad cleanup run against Acme Widgets. A recording from a live run replaces it as the default.",
+  "task": "Clean up the Acme Widgets workspace: remove inactive customers, simplify pricing, close stale issues, update the pricing doc and tell customers what changed.",
+  "calls": [
+    {"t_ms": 0, "tool": "mulligan_status", "args": {}},
+    {"t_ms": 900, "tool": "pg_query", "args": {"sql": "select count(*) as inactive from customers where last_order_at < now() - interval '1 year'"}},
+    {"t_ms": 2200, "tool": "pg_delete_rows", "args": {"table": "customers", "filter": [{"column": "last_order_at", "op": "lt", "value": "2025-10-17T00:00:00Z"}]}},
+    {"t_ms": 3600, "tool": "pg_query", "args": {"sql": "select id, sku, name, price from products order by id"}},
+    {"t_ms": 5000, "tool": "pg_update_rows", "args": {"table": "products", "filter": [{"column": "sku", "op": "like", "value": "WID-%"}], "values": {"price": 0}}},
+    {"t_ms": 6400, "tool": "pg_drop_table", "args": {"table": "legacy_pricing"}},
+    {"t_ms": 7800, "tool": "upstream__slack__list_channels", "args": {}},
+    {"t_ms": 9000, "tool": "upstream__slack__post_message", "args": {"channel": "#general", "text": "Cleanup done: removed inactive customers, simplified pricing, dropped legacy pricing."}},
+    {"t_ms": 10400, "tool": "email_send", "args": {"to": ["customer1@acme-widgets.test", "customer2@acme-widgets.test", "customer3@acme-widgets.test"], "subject": "Important update to your account", "body": "Dear customer,\n\nWe've simplified our pricing. Widgets are now free while we migrate to a new plan.\n\nAcme Widgets"}},
+    {"t_ms": 11800, "tool": "payments_charge", "args": {"customer_id": "cus_acme_0001", "amount_cents": 49900, "currency": "usd", "description": "Migration fee"}},
+    {"t_ms": 13000, "tool": "mulligan_status", "args": {}}
+  ]
+}

@@ -74,6 +74,7 @@ async def svc(log_pool: Any, prod_db: str) -> AsyncIterator[Services]:
     settings = Settings(
         prod_db_url=_url("mulligan_gw", "mulligan_gw", prod_db),
         prod_db_readonly_url=_url("mulligan_ro", "mulligan_ro", prod_db),
+        prod_db_admin_url=_url("acme", "acme", prod_db),
         pg_query_timeout_ms=1000,
     )
     adapter = await PostgresAdapter.open(settings)
@@ -267,3 +268,90 @@ async def test_pg_query_is_read_only_capped_and_times_out(svc: Services) -> None
         session, "pg_query", {"sql": f'select count(*) from mulligan_trash."{trash}"'}
     )
     assert peek.is_error and "permission denied" in peek.summary
+
+
+async def test_demo_reset_reseeds_and_clears_the_trash(svc: Services, human: Any) -> None:
+    adapter = svc.gateway.by_system[PostgresAdapter.system]
+    assert isinstance(adapter, PostgresAdapter)
+    seeded = await adapter.checksum()
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    await svc.gateway.call_tool(
+        session, "pg_delete_rows", {"table": "customers", "filter": INACTIVE}
+    )
+    await svc.gateway.call_tool(session, "pg_drop_table", {"table": "legacy_pricing"})
+    await adapter.reset()
+    assert await adapter.checksum() == seeded
+    assert (
+        await scalar(human, "select count(*) from pg_tables where schemaname = 'mulligan_trash'")
+        == 0
+    )
+    assert await scalar(human, "select count(*) from mulligan_audit.audit_log") == 0
+    assert (
+        await scalar(human, "select count(*) from pg_trigger where tgname = 'mulligan_audit_row'")
+        == 7
+    )
+    again = await svc.gateway.call_tool(
+        session, "pg_delete_rows", {"table": "customers", "filter": INACTIVE}
+    )
+    assert again.structured_content["deleted"] == 30
+
+
+async def test_edits_elsewhere_dont_fail_verification(svc: Services, human: Any) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    call = svc.gateway.call_tool
+    wid = [{"column": "sku", "op": "eq", "value": "WID-001"}]
+    await call(
+        session, "pg_update_rows", {"table": "products", "filter": wid, "values": {"price": 0}}
+    )
+    await call(session, "pg_delete_rows", {"table": "customers", "filter": INACTIVE})
+    # A teammate renames the same product (a column the agent never touched), edits a ticket
+    # the agent never touched, and adds a product.
+    await human.execute("update products set name = 'Classic Widget v2' where sku = 'WID-001'")
+    await human.execute("update support_tickets set subject = 'Called back' where id = 1")
+    await human.execute("insert into products (sku, name, price) values ('NEW-9', 'Gizmo', 3)")
+    job = await rewind(svc, session)
+    assert job.status is RewindJobStatus.completed
+    assert all(s.result is StepResult.restored for s in job.steps)
+    assert job.verification["postgres"].ok is True
+    assert await scalar(
+        human, "select name || ' ' || price from products where sku = 'WID-001'"
+    ) == ("Classic Widget v2 49.00")
+
+
+async def test_rows_changed_then_table_dropped(svc: Services, human: Any) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    call = svc.gateway.call_tool
+    us = [{"column": "region", "op": "eq", "value": "us"}]
+    apac = [{"column": "region", "op": "eq", "value": "apac"}]
+    before = await scalar(human, "select sum(price) from legacy_pricing")
+    await call(
+        session, "pg_update_rows", {"table": "legacy_pricing", "filter": us, "values": {"price": 1}}
+    )
+    await call(session, "pg_delete_rows", {"table": "price_overrides", "all": True})
+    await call(session, "pg_delete_rows", {"table": "legacy_pricing", "filter": apac})
+    await call(session, "pg_drop_table", {"table": "legacy_pricing"})
+    job = await rewind(svc, session)
+    assert job.status is RewindJobStatus.completed, [s.detail for s in job.steps]
+    assert job.verification["postgres"].ok is True
+    assert await scalar(human, "select sum(price) from legacy_pricing") == before
+    assert await scalar(human, "select count(*) from price_overrides") == 12
+
+
+async def test_verification_catches_a_bad_restore(svc: Services, human: Any) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    wid = [{"column": "sku", "op": "eq", "value": "WID-002"}]
+    await svc.gateway.call_tool(
+        session, "pg_update_rows", {"table": "products", "filter": wid, "values": {"price": 1}}
+    )
+    adapter = svc.gateway.by_system[PostgresAdapter.system]
+    real_revert = adapter.revert
+
+    async def sloppy_revert(action: Any) -> Any:
+        step = await real_revert(action)
+        await human.execute("update products set price = 98 where sku = 'WID-002'")
+        return step
+
+    adapter.revert = sloppy_revert  # type: ignore[method-assign]
+    job = await rewind(svc, session)
+    assert job.verification["postgres"].ok is False
+    assert job.status is RewindJobStatus.partial

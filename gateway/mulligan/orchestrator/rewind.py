@@ -149,7 +149,7 @@ class Rewinder:
         try:
             with sentry_sdk.start_span(op="mulligan.rewind", name=job.id):
                 job = await self._run_steps(job, actions)
-                job = await self._verify(job)
+                job = await self._verify(job, actions)
             failed = any(s.result is StepResult.failed for s in job.steps)
             mismatch = any(v.ok is False for v in job.verification.values())
             status = RewindJobStatus.partial if failed or mismatch else RewindJobStatus.completed
@@ -224,15 +224,20 @@ class Rewinder:
         await self.store.save(done)
         return step, done
 
-    async def _verify(self, job: RewindJob) -> RewindJob:
+    async def _verify(self, job: RewindJob, actions: list[Action]) -> RewindJob:
         verification = dict(job.verification)
         for system, check in job.verification.items():
             adapter = self.gateway.by_system.get(System(system))
             expected, actual = check.expected, None
             if adapter is not None:
                 steps = [s for s in job.steps if s.system.value == system]
-                expected = await adapter.expected_checksum(check.expected, steps)
-                actual = await adapter.checksum()
+                mine = [a for a in actions if a.system.value == system]
+                scoped = await adapter.verify_scope(mine, steps)
+                if scoped is not None:
+                    expected, actual = scoped
+                else:
+                    expected = await adapter.expected_checksum(check.expected, steps)
+                    actual = await adapter.checksum()
             ok = actual is not None and actual == expected
             verification[system] = SystemVerification(expected=expected, actual=actual, ok=ok)
             await self.bus.publish(

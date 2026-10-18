@@ -33,6 +33,8 @@ async def serve(settings: Settings) -> None:
         log.info("upstream tools: %s", ", ".join(sorted(upstream.schemas)) or "none")
     services = await build_services(settings, adapters)
     services.gateway.upstream.update(upstream.schemas)
+    if postgres and settings.demo and settings.prod_db_admin_url:
+        services.demo_resets.append(postgres.reset)
     services.start_background()
     rest = create_app(settings, services=services)
     mcp = create_mcp_app(settings, services.gateway)
