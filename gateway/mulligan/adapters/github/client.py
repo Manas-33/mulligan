@@ -87,7 +87,12 @@ class GitHubClient:
         await self.http.aclose()
 
     def url(self, path: str) -> str:
-        if path.startswith(("/", "http://", "https://")):
+        if path.startswith(("http://", "https://")):
+            # Only GitHub's own pagination links: every request carries the token.
+            if httpx.URL(path).host != self.http.base_url.host:
+                raise GitHubError(0, f"refusing a URL off {self.http.base_url.host}")
+            return path
+        if path.startswith("/"):
             return path
         return f"{self.repo_path}/{path}" if path else self.repo_path
 

@@ -43,3 +43,17 @@ def test_like_needs_a_string_pattern(op: str) -> None:
             build_where(PRODUCTS, [{"column": "name", "op": op, "value": value}], False)
     where, params = build_where(PRODUCTS, [{"column": "name", "op": op, "value": "W%"}], False)
     assert params == ["W%"]
+
+
+async def test_github_client_refuses_urls_off_github() -> None:
+    from mulligan.adapters.github.client import GitHubClient, GitHubError
+
+    client = GitHubClient("tok", "acme", "widgets")
+    try:
+        assert client.url("issues") == "/repos/acme/widgets/issues"
+        next_page = "https://api.github.com/repositories/1/issues?page=2"
+        assert client.url(next_page) == next_page
+        with pytest.raises(GitHubError, match="refusing a URL"):
+            client.url("https://evil.example.com/collect")
+    finally:
+        await client.aclose()
