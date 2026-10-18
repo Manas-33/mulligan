@@ -20,7 +20,6 @@ from mulligan_fetch.mulligan_api import MulliganAPI, MulliganError
 
 MENTION = re.compile(r"@agent1[0-9a-z]+")
 CODE = re.compile(r"\b(\d{4})\b")
-MAX_HELD_CARDS = 3
 
 HELP = (
     'I\'m Mulligan Guardian. Give me a task (for example "do the quarter-end cleanup") and my '
@@ -109,37 +108,26 @@ def rewind_card(session_id: str, actions: list[dict[str, Any]]) -> dict[str, str
     )
 
 
-def held_card(action: dict[str, Any]) -> dict[str, str]:
-    code = (action.get("approval") or {}).get("code", "")
-    reason = (action.get("reversibility") or {}).get("reason") or action["reversibility"]["label"]
-    pick = {"action_id": action["id"], "code": code}
-    return card(
-        "review",
-        {
-            "title": f"Approve {action['tool']}?",
-            "summary_rows": [
-                {"label": "What", "value": action.get("summary") or action["tool"]},
-                {"label": "Why it's held", "value": str(reason)},
-                {"label": "Code", "value": code},
-            ],
-            "approve_cta": {
-                "label": "Approve",
-                "selection": {"action": "approve", **pick},
-                "primary": True,
-            },
-            "reject_cta": {"label": "Reject", "selection": {"action": "reject", **pick}},
-        },
-    )
+SYSTEM_NAMES = {"postgres": "Postgres", "github": "GitHub", "notion": "Notion"}
 
 
-def describe_actions(actions: list[dict[str, Any]]) -> str:
-    lines = []
+def describe_by_system(actions: list[dict[str, Any]]) -> str:
+    """What changed, grouped by system. Reads and held actions are left out."""
+    groups: dict[str, list[str]] = {}
     for a in actions:
-        if a["reversibility"]["label"] == "read_only":
+        if a["reversibility"]["label"] == "read_only" or a["status"] == "held":
             continue
-        mark = "held" if a["status"] == "held" else a["status"]
-        lines.append(f"- [{mark}] {a.get('summary') or a['tool']}")
-    return "\n".join(lines) or "- (nothing changed)"
+        name = SYSTEM_NAMES.get(a["system"], a["system"].capitalize())
+        groups.setdefault(name, []).append(f"- {a.get('summary') or a['tool']} ({a['status']})")
+    if not groups:
+        return "Nothing changed."
+    return "\n\n".join(f"{name}:\n" + "\n".join(lines) for name, lines in groups.items())
+
+
+def describe_held(action: dict[str, Any]) -> str:
+    code = (action.get("approval") or {}).get("code", "?")
+    reason = (action.get("reversibility") or {}).get("reason") or action["reversibility"]["label"]
+    return f"- {action.get('summary') or action['tool']} (code {code}; {reason})"
 
 
 def describe_rewind(job: dict[str, Any]) -> str:
@@ -154,71 +142,97 @@ def describe_rewind(job: dict[str, Any]) -> str:
     if kept:
         text += "\nKept because a person changed them after the agent: " + ", ".join(kept[:5])
         text += "…" if len(kept) > 5 else ""
+    held = describe_held_outcomes(job["steps"])
+    if held:
+        text += "\nHeld actions: " + held + "."
     if checks:
         text += "\nChecksums: " + ", ".join(checks) + "."
     return text
 
 
+HELD_NOUNS = {
+    "email_send": ("email", "never sent", "correction sent"),
+    "payments_charge": ("payment", "never charged", "refunded"),
+}
+
+
+def describe_held_outcomes(steps: list[dict[str, Any]]) -> str:
+    """What the rewind did with the email, payment and upstream calls, e.g.
+    "1 email rejected, never sent; 1 payment refunded"."""
+    counts: Counter[str] = Counter()
+    for step in steps:
+        tool = step.get("tool", "")
+        noun, never, offset = HELD_NOUNS.get(tool, ("upstream call", "never made", "offset"))
+        if tool not in HELD_NOUNS and not tool.startswith("upstream__"):
+            continue
+        if step["result"] == "compensated":
+            counts[f"{noun} {offset}"] += 1
+        elif step["result"] == "skipped" and "rejected" in (step.get("detail") or "").lower():
+            counts[f"{noun} rejected, {never}"] += 1
+        elif step["result"] == "skipped":
+            counts[f"{noun} already done, can't be undone"] += 1
+        elif step["result"] == "restored":
+            counts[f"{noun} cancelled"] += 1
+    return "; ".join(f"{n} {what}" for what, n in counts.items())
+
+
 @dataclass
 class GuardianLogic:
+    """Every method returns exactly one Reply: ASI:One shows only the last message per turn."""
+
     api: MulliganAPI
     last_session: dict[str, str] = field(default_factory=dict)  # chat sender -> session id
 
     async def task_finished(
         self, sender: str, task: str, steps: list[dict[str, Any]], action_ids: list[str]
-    ) -> list[Reply]:
+    ) -> Reply:
         if not action_ids:
             ran = ", ".join(f"{s['tool']} ({s['status']})" for s in steps) or "nothing"
-            return [
-                Reply(f"The worker couldn't run that through Mulligan: {ran}.", end_session=True)
-            ]
+            return Reply(f"The worker couldn't run that through Mulligan: {ran}.", end_session=True)
         session_id = (await self.api.action(action_ids[0]))["session_id"]
         self.last_session[sender] = session_id
         actions = await self.api.session_actions(session_id)
         held = [a for a in actions if a["status"] == "held"]
-        text = (
-            f'Done: "{task}" ran through Mulligan as session {session_id}.\n'
-            f"{describe_actions(actions)}\n"
-            + (
-                f"{len(held)} held for approval; nothing irreversible happened yet."
-                if held
-                else "Nothing is waiting for approval."
-            )
-            + ' Say "rewind" to undo everything.'
-        )
-        replies = [Reply(text, card=rewind_card(session_id, actions))]
-        replies += [
-            Reply(f"Held: {a.get('summary') or a['tool']}", card=held_card(a))
-            for a in held[:MAX_HELD_CARDS]
-        ]
-        return replies
+        text = f'Done: "{task}" ran through Mulligan (session {session_id}).\n\n'
+        text += describe_by_system(actions)
+        if held:
+            text += "\n\nHeld for your approval (nothing irreversible has happened):\n"
+            text += "\n".join(describe_held(a) for a in held)
+            code = (held[0].get("approval") or {}).get("code", "1234")
+            text += f'\nSay "approve {code}" or "reject {code}".'
+        else:
+            text += "\n\nNothing is waiting for approval."
+        text += '\n\nPress Rewind (or say "rewind") to undo the whole session.'
+        return Reply(text, card=rewind_card(session_id, actions))
 
-    async def handle(self, sender: str, command: Command) -> list[Reply]:
+    async def handle(self, sender: str, command: Command) -> Reply:
         try:
             return await self._handle(sender, command)
         except MulliganError as exc:
-            return [Reply(f"Mulligan refused that: {exc}", end_session=True)]
+            return Reply(f"Mulligan refused that: {exc}", end_session=True)
 
-    async def _handle(self, sender: str, command: Command) -> list[Reply]:
+    async def _handle(self, sender: str, command: Command) -> Reply:
         if command.kind == "help":
-            return [Reply(HELP, end_session=True)]
+            return Reply(HELP, end_session=True)
         session_id = command.session_id or self.last_session.get(sender)
         if command.kind == "keep":
-            return [Reply("Okay, I'm leaving the session as it is.", end_session=True)]
+            return Reply("Okay, I'm leaving the session as it is.", end_session=True)
         if session_id is None and command.kind in {"rewind", "status"}:
-            return [
-                Reply("There's no session to work on yet. Give me a task first.", end_session=True)
-            ]
+            return Reply(
+                "There's no session to work on yet. Give me a task first.", end_session=True
+            )
         if command.kind == "rewind":
             assert session_id is not None
             job = await self.api.rewind(session_id)
-            return [Reply(describe_rewind(job), end_session=True)]
+            return Reply(describe_rewind(job), end_session=True)
         if command.kind == "status":
             assert session_id is not None
             actions = await self.api.session_actions(session_id)
-            return [Reply(f"Session {session_id}:\n{describe_actions(actions)}", end_session=True)]
+            return Reply(
+                f"Session {session_id}:\n\n{describe_by_system(actions)}", end_session=True
+            )
         if command.kind in {"approve", "reject"}:
-            return [await self._decide(sender, command, session_id)]
+            return await self._decide(sender, command, session_id)
         raise ValueError(f"not a Guardian command: {command.kind}")
 
     async def _decide(self, sender: str, command: Command, session_id: str | None) -> Reply:
