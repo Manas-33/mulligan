@@ -475,3 +475,18 @@ async def test_undrop_gives_back_only_the_view_grants_the_read_only_role_had(
     assert done.status is RewindJobStatus.completed
     assert await scalar(human, can_read.format("pricing_public_v")) is True
     assert await scalar(human, can_read.format("pricing_private_v")) is False
+
+
+async def test_pg_query_leaves_no_session_state_behind(svc: Services, human: Any) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    call = svc.gateway.call_tool
+    for sql_text in [
+        "select pg_advisory_lock(4242)",
+        "select set_config('search_path', 'nowhere', false)",
+    ]:
+        assert not (await call(session, "pg_query", {"sql": sql_text})).is_error
+    await asyncio.sleep(0.2)  # the pool resets returned connections in the background
+    assert await scalar(human, "select pg_try_advisory_lock(4242)") is True
+    for _ in range(4):  # whichever pooled connection answers
+        result = await call(session, "pg_query", {"sql": "select count(*) from products"})
+        assert not result.is_error, result.summary
