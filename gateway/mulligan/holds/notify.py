@@ -86,7 +86,12 @@ class PhotonNotifier:
                 "approver not reachable on iMessage yet; decide from the dashboard (%s)", path
             )
             return NotifyOutcome.not_reachable
-        log.error("Photon service answered %s on %s: %s", res.status_code, path, res.text[:200])
+        # The status and error code only: the body can echo the approver's handle and summary.
+        try:
+            code = str(res.json().get("code") or "")
+        except (ValueError, AttributeError):
+            code = ""
+        log.error("Photon service answered %s on %s %s", res.status_code, path, code)
         return NotifyOutcome.failed
 
     async def notify_approval(self, action: Action) -> NotifyOutcome:
