@@ -14,10 +14,16 @@ from enum import StrEnum
 import httpx
 
 from mulligan.models import Action
+from mulligan.settings import REPO_ROOT, load_dotenv
 
 log = logging.getLogger("mulligan.holds")
 
 SUMMARY_MAX = 300
+
+
+def holds_env() -> dict[str, str]:
+    """The repo's .env overlaid by the process environment, the same precedence as Settings."""
+    return {**load_dotenv(REPO_ROOT / ".env"), **os.environ}
 
 
 class NotifyOutcome(StrEnum):
@@ -47,14 +53,13 @@ class PhotonNotifier:
     transport: httpx.AsyncBaseTransport | None = None
 
     @classmethod
-    def from_env(cls) -> PhotonNotifier:
+    def from_env(cls, env: dict[str, str] | None = None) -> PhotonNotifier:
+        env = holds_env() if env is None else env
         return cls(
-            base_url=os.environ.get("PHOTON_SERVICE_URL", "").rstrip("/"),
-            service_token=os.environ.get("MULLIGAN_SERVICE_TOKEN", ""),
-            approver=(
-                os.environ.get("APPROVER_HANDLE", "").strip()
-                or os.environ.get("APPROVER_PHONE", "").strip()
-            ),
+            base_url=env.get("PHOTON_SERVICE_URL", "").strip().rstrip("/"),
+            service_token=env.get("MULLIGAN_SERVICE_TOKEN", "").strip(),
+            approver=env.get("APPROVER_HANDLE", "").strip()
+            or env.get("APPROVER_PHONE", "").strip(),
         )
 
     @property

@@ -1,4 +1,21 @@
-// Runtime settings, read once from the environment (docker compose passes .env through).
+// Runtime settings: the repo-root .env, overlaid by the process environment (docker compose
+// passes .env through as real variables; on the host, `make photon` just reads the file).
+
+import { existsSync, readFileSync } from "node:fs";
+
+export function readDotenv(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  const out: Record<string, string> = {};
+  for (const raw of readFileSync(path, "utf8").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || !line.includes("=")) continue;
+    const i = line.indexOf("=");
+    out[line.slice(0, i).trim()] = line.slice(i + 1).split(" #")[0]!.trim().replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
+
+const ROOT_ENV = new URL("../../.env", import.meta.url).pathname;
 
 export type Config = {
   port: number;
@@ -10,7 +27,7 @@ export type Config = {
   approverHandle: string;
 };
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(env: NodeJS.ProcessEnv = { ...readDotenv(ROOT_ENV), ...process.env }): Config {
   const required = (name: string): string => {
     const value = env[name]?.trim();
     if (!value) throw new Error(`${name} is not set`);

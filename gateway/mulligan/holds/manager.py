@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import secrets
 from datetime import timedelta
 
 from mulligan.core import utcnow
-from mulligan.holds.notify import NotifyOutcome, PhotonNotifier
+from mulligan.holds.notify import NotifyOutcome, PhotonNotifier, holds_env
 from mulligan.interfaces import HoldDeps, HoldManager, HoldNotFound, NotHeld, WrongCode
 from mulligan.models import (
     Action,
@@ -37,7 +36,8 @@ DEFAULT_TTL = timedelta(minutes=15)
 
 def hold_ttl() -> timedelta | None:
     """MULLIGAN_HOLD_TTL_MINUTES (default 15). 0 means holds never expire."""
-    minutes = float(os.environ.get("MULLIGAN_HOLD_TTL_MINUTES", DEFAULT_TTL.total_seconds() / 60))
+    raw = holds_env().get("MULLIGAN_HOLD_TTL_MINUTES", "").strip()
+    minutes = float(raw) if raw else DEFAULT_TTL.total_seconds() / 60
     return timedelta(minutes=minutes) if minutes > 0 else None
 
 
@@ -137,7 +137,19 @@ class PhotonHoldManager(HoldManager):
         )
         if not approve:
             return action
-        return await self.deps.runner.run_held(action_id)
+        try:
+            return await self.deps.runner.run_held(action_id)
+        except Exception as exc:  # noqa: BLE001 (the approval is recorded; never leave it "approved")
+            log.exception("running approved action %s failed", action_id)
+            failed = (await self.deps.store.get(action_id) or action).model_copy(
+                update={
+                    "status": ActionStatus.failed,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            await self.deps.store.save(failed)
+            await self.deps.bus.publish(EventName.action_failed, failed)
+            return failed
 
     # --- expire ---------------------------------------------------------------------------------
 

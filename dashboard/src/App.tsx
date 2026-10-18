@@ -54,7 +54,13 @@ export function App() {
         <nav className="sessions" aria-label="Sessions">
           {sessions.length === 0 && <p className="muted">No sessions yet.</p>}
           {sessions.map((s) => (
-            <SessionItem key={s.id} session={s} active={s.id === current} onSelect={() => setSelected(s.id)} />
+            <SessionItem
+              key={s.id}
+              session={s}
+              count={timeline(state, s.id).length}
+              active={s.id === current}
+              onSelect={() => setSelected(s.id)}
+            />
           ))}
         </nav>
         <main className="timeline">
@@ -73,12 +79,14 @@ export function App() {
   );
 }
 
-function SessionItem({ session, active, onSelect }: { session: Session; active: boolean; onSelect: () => void }) {
+// `count` comes from live state: Session.action_count is only as fresh as the last session event.
+function SessionItem(props: { session: Session; count: number; active: boolean; onSelect: () => void }) {
+  const { session, count, active, onSelect } = props;
   return (
     <button className={`session ${active ? "active" : ""}`} onClick={onSelect} aria-current={active}>
       <strong>{session.agent.display_name}</strong>
       <span className="muted">
-        {session.action_count} actions · {session.status}
+        {count} {count === 1 ? "action" : "actions"} · {session.status}
         {session.mode === "replay" && <span className="pill">replay</span>}
       </span>
       <time className="muted">{new Date(session.started_at).toLocaleTimeString()}</time>

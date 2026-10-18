@@ -38,7 +38,7 @@ export async function handleReply(msg: InboundText, messenger: Messenger, gatewa
     const verdict =
       parsed.decision === "approve"
         ? after.status === "failed"
-          ? `Approved, but it failed to run: ${after.error ?? "see the dashboard"}.`
+          ? `Approved, but it didn't run (${after.error ?? "see the dashboard"}).`
           : "Approved. It's running now."
         : "Rejected. It won't run.";
     await say(`${verdict} (${action.tool}, ${action.id.slice(-6)})`);
@@ -48,6 +48,8 @@ export async function handleReply(msg: InboundText, messenger: Messenger, gatewa
       await say(`Code ${parsed.code} was already decided.`);
       return "already-decided";
     }
+    // Never leave the approver hanging: say it didn't go through, then let the loop log it.
+    await say(`Couldn't record that (Mulligan error). Decide it in the dashboard instead.`);
     throw e;
   }
 }

@@ -31,7 +31,7 @@ test("approved but the call failed: says so", async () => {
   const g = new FakeGateway([heldAction("4821")]);
   g.runResult = "failed";
   await handleReply(inbound("m1", "YES 4821"), m, g);
-  assert.match(m.texts()[0]!, /^Approved, but it failed to run/);
+  assert.match(m.texts()[0]!, /^Approved, but it didn't run/);
 });
 
 test("unknown code, already decided, and chatter", async () => {
@@ -50,10 +50,12 @@ test("unknown code, already decided, and chatter", async () => {
   assert.equal(m.sent.length, before);
 });
 
-test("gateway errors other than 404/409 propagate", async () => {
+test("gateway errors other than 404/409 still answer the approver, then propagate", async () => {
+  const m = new FakeMessenger();
   const g = new FakeGateway([heldAction("4821")]);
   g.failWith = new GatewayError(500, "boom");
-  await assert.rejects(handleReply(inbound("m1", "YES 4821"), new FakeMessenger(), g), GatewayError);
+  await assert.rejects(handleReply(inbound("m1", "YES 4821"), m, g), GatewayError);
+  assert.match(m.texts()[0]!, /^Couldn't record that/);
 });
 
 test("loop: handles each new reply once and ignores ones from before startup", async () => {

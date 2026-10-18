@@ -287,3 +287,32 @@ def test_core_picks_up_stream_b_plugins(monkeypatch: pytest.MonkeyPatch) -> None
     hm = services.make_hold_manager(HoldDeps(store=store, bus=MemBus(), runner=Runner(store)))
     assert isinstance(hm, PhotonHoldManager)
     assert services.make_hold_adapters() == holds.create_adapters() == []
+
+
+def test_notifier_reads_env_overrides_and_handle_fallback() -> None:
+    n = PhotonNotifier.from_env(
+        {
+            "PHOTON_SERVICE_URL": "http://photon:8100/",
+            "MULLIGAN_SERVICE_TOKEN": "svc",
+            "APPROVER_HANDLE": " ",
+            "APPROVER_PHONE": "+15555550123",
+        }
+    )
+    assert (n.base_url, n.approver, n.enabled) == ("http://photon:8100", "+15555550123", True)
+    assert not PhotonNotifier.from_env({}).enabled
+
+
+async def test_approve_when_running_raises_marks_failed_instead_of_500() -> None:
+    hm, store, bus, runner = manager()
+
+    async def boom(action_id: str) -> Action:
+        raise RuntimeError("ToolNotFound('email_send')")
+
+    runner.run_held = boom  # type: ignore[method-assign]
+    held = await hm.hold(make_action(), HoldKind.email_outbox)
+    assert held.approval is not None
+    result = await hm.on_decision(held.id, decision(held.approval.code))
+    assert result.status is ActionStatus.failed
+    assert result.error == "RuntimeError: ToolNotFound('email_send')"
+    assert store.actions[held.id].status is ActionStatus.failed
+    assert bus.names() == ["action.held", "action.approved", "action.failed"]
