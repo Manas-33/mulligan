@@ -26,7 +26,8 @@ export type ClientOptions = { baseUrl: string; token: string; fetch?: typeof fet
 
 export type ActionQuery = { session_id?: string; since?: string; system?: System; status?: ActionStatus };
 
-export function createClient({ baseUrl, token, fetch: doFetch = fetch }: ClientOptions) {
+// Look fetch up per call (not once here) so later wrappers, like Sentry's, still see our requests.
+export function createClient({ baseUrl, token, fetch: doFetch = (input, init) => fetch(input, init) }: ClientOptions) {
   async function request<T>(
     path: string,
     { query = {}, body }: { query?: Record<string, string | undefined>; body?: unknown } = {},
