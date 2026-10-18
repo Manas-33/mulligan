@@ -118,5 +118,6 @@ test("an answer sent before the request went out doesn't decide it", async () =>
   const late = inbound("m1", "YES 4821", "2026-10-18T01:00:00.000Z");
   assert.equal(await handleReply(late, m, g, APPROVER), "stale");
   assert.equal(g.decisions.length, 0);
-  assert.equal(await handleReply(inbound("m2", "YES 4821", "2026-10-18T01:06:00.000Z"), m, g, APPROVER), "approve");
+  // A few seconds "before" it is clock skew between Photon and the gateway, not a stale answer.
+  assert.equal(await handleReply(inbound("m2", "YES 4821", "2026-10-18T01:04:50.000Z"), m, g, APPROVER), "approve");
 });

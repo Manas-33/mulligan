@@ -6,6 +6,8 @@ import { parseReply, sameHandle } from "./parse.ts";
 import type { InboundText, Messenger } from "./photon.ts";
 
 export type ReplyLog = (line: string) => void;
+
+const CLOCK_SKEW_MS = 60_000;
 /** Where loop errors go besides the log (Sentry in main.ts). */
 export type OnError = (error: unknown) => void;
 
@@ -33,7 +35,8 @@ export async function handleReply(
   const held = await gateway.heldActions();
   const action = held.find((a) => a.approval?.code === parsed.code);
   const requestedAt = action?.approval?.requested_at;
-  if (action && requestedAt && Date.parse(msg.createdAt) < Date.parse(requestedAt)) {
+  // Photon's clock and the gateway's can disagree by a little: allow a minute.
+  if (action && requestedAt && Date.parse(msg.createdAt) < Date.parse(requestedAt) - CLOCK_SKEW_MS) {
     // Sent before this request went out: a late or repeated answer to an earlier hold that had
     // the same code. Saying nothing is safer than deciding the new one.
     return "stale";
