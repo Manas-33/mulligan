@@ -41,6 +41,8 @@ def load_dotenv(path: Path) -> dict[str, str]:
             value = value[1:-1]
         else:
             value = value.split(" #", 1)[0].strip()
+            if value.startswith("#"):  # `KEY=   # comment`: no value
+                value = ""
         values[key.strip()] = value
     return values
 
@@ -105,7 +107,9 @@ class Settings:
         env = {**load_dotenv(REPO_ROOT / ".env"), **(environ or os.environ)}
 
         def get(key: str, default: str = "") -> str:
-            return env.get(key, "").strip() or default
+            # Docker Compose reads `KEY=   # comment` as the value "# comment"; treat it as unset.
+            value = env.get(key, "").strip()
+            return default if not value or value.startswith("#") else value
 
         def csv(key: str, default: str) -> tuple[str, ...]:
             return tuple(p.strip() for p in get(key, default).split(",") if p.strip())

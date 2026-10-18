@@ -334,10 +334,9 @@ def stale_numbers(report: Report) -> list[int]:
 
 async def main(argv: list[str]) -> int:
     import os
+    from pathlib import Path
 
     from mulligan.settings import REPO_ROOT, load_dotenv
-
-    from pathlib import Path
 
     # MULLIGAN_DOTENV points at another checkout's .env (e.g. from a git worktree).
     dotenv = Path(os.environ.get("MULLIGAN_DOTENV") or REPO_ROOT / ".env")
