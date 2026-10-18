@@ -83,9 +83,12 @@ class UpstreamAdapter(Adapter):
             try:
                 async with asyncio.timeout(self.timeout_s), self.connect(target) as client:
                     listed = (await client.list_tools()).tools
-            except Exception:  # noqa: BLE001 (one bad upstream shouldn't stop the gateway)
+            except Exception as exc:  # noqa: BLE001 (one bad upstream shouldn't stop the gateway)
+                # The name and error type only: the URL (in the traceback too) may hold a key.
                 log.warning(
-                    "upstream %s unreachable; its tools are not exposed", server, exc_info=True
+                    "upstream %s unreachable (%s); its tools are not exposed",
+                    server,
+                    type(exc).__name__,
                 )
                 continue
             for tool in listed:
