@@ -1,0 +1,11 @@
+[project]
+name = "spike-03-pg-typed-undo"
+version = "0.0.0"
+description = "Phase 0 spike 0.3: Postgres typed-tool undo (throwaway)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "psycopg[binary]==3.3.6",
+]
+
+[tool.uv]
+package = false
