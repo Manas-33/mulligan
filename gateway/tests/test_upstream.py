@@ -190,3 +190,30 @@ async def test_mcp_server_lists_upstream_tools_with_their_schema(upstream_svc: A
     assert post.description and post.description.startswith("[via slack; held unless read-only]")
     assert set(post.input_schema["properties"]) == {"channel", "text"}
     assert "pg_delete_rows" not in tools  # no Postgres adapter in this gateway
+
+
+async def test_the_timeout_holds_with_the_real_mcp_client() -> None:
+    from mcp.server import MCPServer
+
+    stuck = MCPServer("stuck")
+
+    @stuck.tool(name="wait_forever", description="Never answers.")
+    async def wait_forever() -> str:
+        await asyncio.sleep(30)
+        return "late"
+
+    adapter = UpstreamAdapter({"stuck": stuck}, timeout_s=0.5)
+    await adapter.discover()
+    name = exposed_name("stuck", "wait_forever")
+    call = ToolCall(
+        action_id="act_" + "0" * 26,
+        session_id="ses_" + "0" * 26,
+        agent=AGENT,
+        tool=name,
+        system=System.upstream,
+        args={},
+        upstream_server="stuck",
+    )
+    # A TimeoutError (an Exception the core logs on the action), not a CancelledError.
+    with pytest.raises(TimeoutError, match="didn't answer"):
+        await adapter.execute(call, await adapter.capture_before(call))
