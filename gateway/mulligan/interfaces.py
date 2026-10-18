@@ -4,7 +4,8 @@ Stream A implements the core, the action log, the event bus, the Postgres/GitHub
 and the YAML policy. Stream B implements, inside ``holds/`` and ``classify/``:
 
 * ``holds/__init__.py``: ``create_hold_manager(deps: HoldDeps) -> HoldManager`` and
-  ``create_adapters() -> list[Adapter]`` (the email and payments adapters).
+  ``create_adapters() -> list[Adapter]``: the email (system ``email``) and payments (system
+  ``payments``) adapters. They execute approved calls and undo them like any other adapter.
 * ``classify/__init__.py``: ``create_classifier() -> Classifier`` (the rules gate).
 
 Until those exist the core uses its own stubs: a classifier that holds everything and a hold
@@ -20,8 +21,12 @@ How a call flows:
    ``capture_after`` -> ``build_inverse``.
 4. A held call goes to ``HoldManager.hold``. The core keeps its unredacted arguments. When someone
    approves it, the hold manager calls ``HeldCallRunner.run_held``, which runs step 3.
-5. A rewind walks the actions newest first and calls ``Adapter.plan_revert`` (dry run) or
-   ``Adapter.revert``, or ``HoldManager.cancel`` for an action that is still held.
+5. A rewind walks the actions newest first. An action that hasn't run yet (``held`` or
+   ``approved``) goes to ``HoldManager.cancel``. One that ran goes to its system's adapter,
+   ``Adapter.plan_revert`` (dry run) or ``Adapter.revert``, including email and payments: the
+   payments adapter cancels an authorization that wasn't captured and refunds one that was
+   (``compensated``), and the email adapter returns ``skipped`` for a sent email, or
+   ``compensated`` if it sends a correction.
 """
 
 from __future__ import annotations
@@ -130,6 +135,11 @@ class Adapter(ABC):
         still matches; otherwise a human changed it, so leave it, list it in ``kept_fields`` and
         return ``kept_human_edit``. Nothing is merged. Return ``skipped`` when there is nothing safe
         to do, and ``failed`` (with ``detail``) instead of raising.
+
+        An effect that can't be undone but can be offset returns ``compensated``: the payments
+        adapter refunds a captured charge (inverse ``payments.refund``; an uncaptured one is
+        cancelled with ``payments.cancel_authorization`` and is ``restored``), and the email
+        adapter may send a correction for a sent email (``email.send_correction``).
         """
 
     @abstractmethod
@@ -266,11 +276,15 @@ class HoldManager(ABC):
         Assign an approval code that is unique among held actions, set ``approval`` (and ``hold``
         when ``hold_kind`` is set; it is ``None`` for upstream calls), save the action with status
         ``held``, publish ``action.held`` and text the approver. Return the saved action.
+
+        If the Photon service answers 409 ``approver_not_reachable`` (the approver hasn't texted
+        the shared line yet), don't retry: the action stays ``held`` and can still be decided from
+        the dashboard or ASI:One.
         """
 
     @abstractmethod
     async def on_decision(self, action_id: str, decision: ApprovalDecisionRequest) -> Action:
-        """Record an approve or reject from iMessage or the dashboard.
+        """Record an approve or reject from iMessage, the dashboard or ASI:One.
 
         Raise ``HoldNotFound``, ``NotHeld`` or ``WrongCode``. On approve, publish
         ``action.approved``, then call ``HeldCallRunner.run_held``. On reject, publish
@@ -283,8 +297,16 @@ class HoldManager(ABC):
 
         Expire holds past ``approval.expires_at`` (``hold.expired``) and capture payments past
         ``hold.release_at`` (``hold.released``). Return the actions it changed.
+
+        A payment's ``hold.release_at`` must be earlier than ``hold.authorization_expires_at``
+        (Stripe's ``capture_before``), or the authorization lapses before the capture: set it that
+        way when authorizing, and capture early rather than miss the window.
         """
 
     @abstractmethod
     async def cancel(self, action: Action) -> RewindStep:
-        """Rewind an action that hasn't run yet (held or approved): reject it and drop the hold."""
+        """Rewind an action that hasn't run yet (held or approved): reject it and drop the hold.
+
+        Only for actions that haven't run. Undoing an email that was sent or a payment that was
+        authorized or captured is the email or payments adapter's ``revert``.
+        """
