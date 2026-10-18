@@ -13,6 +13,7 @@ import {
   stepKind,
   timeLeft,
   undoableFrom,
+  isUndoable,
   unfinishedSteps,
   describeProblem,
 } from "../src/view.ts";
@@ -127,6 +128,15 @@ describe("undoableFrom", () => {
     ];
     expect(undoableFrom(list, "2026-10-17T23:04:14Z").map((a) => a.id)).toEqual(["a4", "a2"]);
     expect(undoableFrom(list, "2026-10-17T23:05:00Z")).toEqual([]);
+  });
+
+  it("matches the gateway: no kept-edit conflicts, no reads", () => {
+    const read = action({ id: "r", status: "executed", reversibility: { label: "read_only", source: "policy", reason: null } });
+    const kept = action({ id: "k", status: "conflict" });
+    expect(isUndoable(read)).toBe(false);
+    expect(isUndoable(kept)).toBe(false);
+    expect(isUndoable(action({ id: "w", status: "executed" }))).toBe(true);
+    expect(undoableFrom([read, kept], "2000-01-01T00:00:00Z")).toEqual([]);
   });
 });
 
