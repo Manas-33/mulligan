@@ -4,10 +4,12 @@ import { GatewayError } from "../src/gateway.ts";
 import { handleReply, replyLoop } from "../src/replies.ts";
 import { FakeGateway, FakeMessenger, heldAction, inbound } from "./fakes.ts";
 
+const APPROVER = "Approver@iCloud.com";
+
 test("YES <code> approves the matching held action", async () => {
   const m = new FakeMessenger();
   const g = new FakeGateway([heldAction("1111", 1), heldAction("4821", 2)]);
-  assert.equal(await handleReply(inbound("m1", "YES 4821"), m, g), "approve");
+  assert.equal(await handleReply(inbound("m1", "YES 4821"), m, g, APPROVER), "approve");
   assert.equal(g.decisions[0]!.actionId, heldAction("4821", 2).id);
   assert.deepEqual(g.decisions[0]!.body, {
     decision: "approve",
@@ -22,7 +24,7 @@ test("YES <code> approves the matching held action", async () => {
 test("NO <code> rejects", async () => {
   const m = new FakeMessenger();
   const g = new FakeGateway([heldAction("4821")]);
-  assert.equal(await handleReply(inbound("m1", "no 4821"), m, g), "reject");
+  assert.equal(await handleReply(inbound("m1", "no 4821"), m, g, APPROVER), "reject");
   assert.match(m.texts()[0]!, /^Rejected\. It won't run\./);
 });
 
@@ -30,23 +32,23 @@ test("approved but the call failed: says so", async () => {
   const m = new FakeMessenger();
   const g = new FakeGateway([heldAction("4821")]);
   g.runResult = "failed";
-  await handleReply(inbound("m1", "YES 4821"), m, g);
+  await handleReply(inbound("m1", "YES 4821"), m, g, APPROVER);
   assert.match(m.texts()[0]!, /^Approved, but it didn't run/);
 });
 
 test("unknown code, already decided, and chatter", async () => {
   const m = new FakeMessenger();
   const g = new FakeGateway([heldAction("4821")]);
-  assert.equal(await handleReply(inbound("m1", "YES 9999"), m, g), "no-match");
+  assert.equal(await handleReply(inbound("m1", "YES 9999"), m, g, APPROVER), "no-match");
   assert.match(m.texts()[0]!, /No request is waiting with code 9999/);
 
   g.failWith = new GatewayError(409, "action is approved, not held");
-  assert.equal(await handleReply(inbound("m2", "YES 4821"), m, g), "already-decided");
+  assert.equal(await handleReply(inbound("m2", "YES 4821"), m, g, APPROVER), "already-decided");
 
-  assert.equal(await handleReply(inbound("m3", "yes please"), m, g), "unparseable");
+  assert.equal(await handleReply(inbound("m3", "yes please"), m, g, APPROVER), "unparseable");
   assert.match(m.texts().at(-1)!, /Reply "YES 1234"/);
   const before = m.sent.length;
-  assert.equal(await handleReply(inbound("m4", "thanks!"), m, g), "ignored");
+  assert.equal(await handleReply(inbound("m4", "thanks!"), m, g, APPROVER), "ignored");
   assert.equal(m.sent.length, before);
 });
 
@@ -54,7 +56,7 @@ test("gateway errors other than 404/409 still answer the approver, then propagat
   const m = new FakeMessenger();
   const g = new FakeGateway([heldAction("4821")]);
   g.failWith = new GatewayError(500, "boom");
-  await assert.rejects(handleReply(inbound("m1", "YES 4821"), m, g), GatewayError);
+  await assert.rejects(handleReply(inbound("m1", "YES 4821"), m, g, APPROVER), GatewayError);
   assert.match(m.texts()[0]!, /^Couldn't record that/);
 });
 
@@ -64,7 +66,7 @@ test("loop: handles each new reply once and ignores ones from before startup", a
   m.inbox = [inbound("old", "YES 4821", "2026-10-18T00:59:59.000Z"), inbound("new", "YES 4821")];
   const stop = new AbortController();
   const logs: string[] = [];
-  const loop = replyLoop(m, g, {
+  const loop = replyLoop(m, g, APPROVER, {
     intervalMs: 5,
     signal: stop.signal,
     log: (l) => logs.push(l),
@@ -85,7 +87,7 @@ test("loop: a failed decision goes to onError (once while it keeps failing)", as
   m.inbox = [inbound("a", "YES 4821"), inbound("b", "YES 4821")];
   const stop = new AbortController();
   const reported: unknown[] = [];
-  const loop = replyLoop(m, g, {
+  const loop = replyLoop(m, g, APPROVER, {
     intervalMs: 5,
     signal: stop.signal,
     log: () => {},
@@ -97,4 +99,25 @@ test("loop: a failed decision goes to onError (once while it keeps failing)", as
   await loop;
   assert.equal(reported.length, 1);
   assert.ok(reported[0] instanceof GatewayError);
+});
+
+test("texts from anyone but the approver are ignored without a reply", async () => {
+  const m = new FakeMessenger();
+  const g = new FakeGateway([heldAction("4821")]);
+  const stranger = { ...inbound("m1", "YES 4821"), from: "+15550001111" };
+  assert.equal(await handleReply(stranger, m, g, APPROVER), "not-approver");
+  assert.equal(g.decisions.length, 0);
+  assert.equal(m.sent.length, 0);
+});
+
+test("an answer sent before the request went out doesn't decide it", async () => {
+  const m = new FakeMessenger();
+  const action = heldAction("4821");
+  action.approval = { code: "4821", requested_at: "2026-10-18T01:05:00.000Z" } as typeof action.approval;
+  const g = new FakeGateway([action]);
+  const late = inbound("m1", "YES 4821", "2026-10-18T01:00:00.000Z");
+  assert.equal(await handleReply(late, m, g, APPROVER), "stale");
+  assert.equal(g.decisions.length, 0);
+  // A few seconds "before" it is clock skew between Photon and the gateway, not a stale answer.
+  assert.equal(await handleReply(inbound("m2", "YES 4821", "2026-10-18T01:04:50.000Z"), m, g, APPROVER), "approve");
 });

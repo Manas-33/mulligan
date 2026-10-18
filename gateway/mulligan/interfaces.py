@@ -257,6 +257,10 @@ class ActionStore(Protocol):
 
     async def list_by_status(self, *statuses: str) -> list[Action]: ...
 
+    async def drop_held_call(self, action_id: str) -> None:
+        """Forget a held call's stored (unredacted) arguments once it can never run."""
+        ...
+
 
 class EventBus(Protocol):
     async def publish(self, event: EventName, data: BaseModel) -> int:

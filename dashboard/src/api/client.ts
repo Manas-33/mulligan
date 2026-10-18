@@ -24,7 +24,14 @@ export class ApiError extends Error {
 
 export type ClientOptions = { baseUrl: string; token: string; fetch?: typeof fetch };
 
-export type ActionQuery = { session_id?: string; since?: string; system?: System; status?: ActionStatus };
+export type ActionQuery = {
+  session_id?: string;
+  since?: string;
+  system?: System;
+  status?: ActionStatus;
+  order?: "asc" | "desc";
+  limit?: string;
+};
 
 // Look fetch up per call (not once here) so later wrappers, like Sentry's, still see our requests.
 export function createClient({ baseUrl, token, fetch: doFetch = (input, init) => fetch(input, init) }: ClientOptions) {
