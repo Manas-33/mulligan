@@ -24,7 +24,7 @@ mulligan/
 │   │   └── classify/     #   B: policy lookup + rules gate for unknown upstream tools
 │   ├── migrations/       #   A: mulligan-db schema
 │   └── tests/
-├── approvals-photon/     # B: TypeScript, spectrum-ts iMessage approvals service
+├── approvals-photon/     # B: TypeScript, Photon 2.0 (@photon-ai/api) iMessage approvals service
 ├── dashboard/            # B: React + Vite. All UI lives here and only here.
 ├── fetch-agent/          # A: uAgents Guardian + worker agents (ASI:One)
 ├── demo/                 # A: seeded fake company, rogue agent (live + replay), mock upstream MCP server, reset, checksums

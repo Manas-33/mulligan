@@ -74,3 +74,43 @@ def test_event_envelope_narrows_on_event_name() -> None:
         models.MulliganEvent.model_validate(
             {"event": "session.started", "seq": 1, "ts": "2026-10-17T23:04:28Z", "data": action}
         )
+
+
+@pytest.mark.parametrize("handle", ["+15555550123", "approver@icloud.com"])
+def test_approver_handle_is_a_phone_or_an_email(handle: str) -> None:
+    models.NotifyApprovalRequest(
+        action_id="act_01M561R2302EME3JAF7RBZWM16", code="4821", summary="x", to=handle
+    )
+
+
+@pytest.mark.parametrize("handle", ["5555550123", "not an email", "@icloud.com"])
+def test_approver_handle_rejects_anything_else(handle: str) -> None:
+    with pytest.raises(ValueError):
+        models.NotifySummaryRequest(
+            rewind_job_id="rwd_01M561RFRGVASABYV8XG40DDX0", text="x", to=handle
+        )
+
+
+@pytest.mark.parametrize("value", [49, "Classic Widget", None, True, [1, 2], {"id": 7}])
+def test_field_change_values_are_any_json(value: object) -> None:
+    change = models.FieldChange(
+        field="postgres:products/42/price",
+        before=value,
+        agent_value=value,
+        current=value,
+        outcome=models.FieldChangeOutcome.restore,
+    )
+    assert change.model_dump(mode="json")["before"] == value
+
+
+def test_payment_hold_carries_its_authorization_expiry() -> None:
+    hold = models.Hold.model_validate(
+        {
+            "kind": "payment_auth",
+            "release_at": "2026-10-18T00:00:00Z",
+            "authorization_expires_at": "2026-10-24T00:00:00Z",
+            "external_id": "pi_123",
+        }
+    )
+    assert hold.release_at is not None and hold.authorization_expires_at is not None
+    assert hold.release_at < hold.authorization_expires_at

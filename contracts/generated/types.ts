@@ -18,7 +18,7 @@ export type AgentKind = "claude_code" | "devin" | "fetch" | "rogue" | "other";
  */
 export type System = "postgres" | "github" | "notion" | "email" | "payments" | "upstream" | "mulligan";
 /**
- * Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).
+ * Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. reverted covers both an undo and an offset (a refund or a correction email; the step's result says compensated). conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).
  *
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "ActionStatus".
@@ -51,10 +51,12 @@ export type ReversibilityLabel = "read_only" | "reversible" | "reversible_noisy"
  */
 export type ReversibilitySource = "policy" | "rules" | "override";
 /**
+ * Where the decision came from: an iMessage reply, the dashboard, or the Guardian agent's review card in ASI:One.
+ *
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "ApprovalChannel".
  */
-export type ApprovalChannel = "imessage" | "dashboard";
+export type ApprovalChannel = "imessage" | "dashboard" | "asi_one";
 /**
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "ApprovalDecision".
@@ -85,12 +87,12 @@ export type SessionStatus = "active" | "ended" | "rewound";
  */
 export type RewindJobStatus = "planned" | "running" | "completed" | "partial" | "failed";
 /**
- * pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. skipped: nothing to undo or nothing safe to do (read-only, an email already sent, a human reused a deleted row's key). failed: see detail.
+ * pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. compensated: the effect couldn't be undone, so it was offset instead (a captured payment refunded, a correction email sent). skipped: nothing to undo or nothing safe to do (read-only, an email already sent with no correction, a human reused a deleted row's key). failed: see detail.
  *
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "StepResult".
  */
-export type StepResult = "pending" | "restored" | "kept_human_edit" | "skipped" | "failed";
+export type StepResult = "pending" | "restored" | "kept_human_edit" | "compensated" | "skipped" | "failed";
 /**
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "FieldChangeOutcome".
@@ -202,7 +204,7 @@ export interface Reversibility {
  */
 export interface Inverse {
   /**
-   * <adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox, payments.cancel_authorization, none.
+   * <adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox (not sent yet), email.send_correction (sent; offset with a correction email), payments.cancel_authorization (authorized, not captured), payments.refund (captured), none.
    */
   kind: string;
   payload: {
@@ -241,9 +243,13 @@ export interface Approval {
 export interface Hold {
   kind: HoldKind;
   /**
-   * payment_auth: when the authorization is captured (end of the undo window). email_outbox: null, it sends on approval.
+   * payment_auth: when the authorization is captured (end of the undo window); always before authorization_expires_at. email_outbox: null, it sends on approval.
    */
   release_at: string | null;
+  /**
+   * payment_auth: when the card authorization lapses (Stripe's capture_before; about 7 days for a customer-initiated Visa charge). release_at must come before it, or the capture fails and the money is never collected. null for email_outbox.
+   */
+  authorization_expires_at: string | null;
   /**
    * Stripe PaymentIntent id, or the outbox row id.
    */
@@ -342,7 +348,7 @@ export interface RewindScope {
   action_ids?: [string, ...string[]];
 }
 /**
- * One field a rewind step looks at. Values are JSON; for a whole row or table they are the row object or null when absent.
+ * One field a rewind step looks at. before (the value before the agent's action, which the rewind restores), agent_value (what the agent wrote) and current (the value when the step was planned or run; it differs from agent_value if a human changed it) are each any JSON value: number, string, boolean, array, object, or null when absent. For a whole row or table they are the row object.
  *
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "FieldChange".
@@ -352,24 +358,9 @@ export interface FieldChange {
    * A field path (see Action.after_hashes).
    */
   field: string;
-  /**
-   * Value before the agent's action. What the rewind restores.
-   */
-  before: {
-    [k: string]: unknown;
-  };
-  /**
-   * What the agent wrote.
-   */
-  agent_value: {
-    [k: string]: unknown;
-  };
-  /**
-   * Value when the step was planned or run. Differs from agent_value if a human changed it.
-   */
-  current: {
-    [k: string]: unknown;
-  };
+  before: unknown;
+  agent_value: unknown;
+  current: unknown;
   outcome: FieldChangeOutcome;
 }
 /**
@@ -574,7 +565,7 @@ export interface NotifyApprovalRequest {
    */
   summary: string;
   /**
-   * E.164.
+   * The approver's iMessage handle (APPROVER_HANDLE): an E.164 phone number or an Apple ID email.
    */
   to: string;
 }
@@ -587,6 +578,9 @@ export interface NotifyApprovalRequest {
 export interface NotifySummaryRequest {
   rewind_job_id: string;
   text: string;
+  /**
+   * The approver's iMessage handle (APPROVER_HANDLE): an E.164 phone number or an Apple ID email.
+   */
   to: string;
 }
 /**

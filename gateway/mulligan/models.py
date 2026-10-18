@@ -53,7 +53,7 @@ class System(StrEnum):
 
 class ActionStatus(StrEnum):
     """
-    Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).
+    Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. reverted covers both an undo and an offset (a refund or a correction email; the step's result says compensated). conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).
     """
 
     pending = "pending"
@@ -114,14 +114,19 @@ class Inverse(BaseModel):
     )
     kind: Annotated[str, Field(examples=["postgres.audit_log"])]
     """
-    <adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox, payments.cancel_authorization, none.
+    <adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox (not sent yet), email.send_correction (sent; offset with a correction email), payments.cancel_authorization (authorized, not captured), payments.refund (captured), none.
     """
     payload: dict[str, Any]
 
 
 class ApprovalChannel(StrEnum):
+    """
+    Where the decision came from: an iMessage reply, the dashboard, or the Guardian agent's review card in ASI:One.
+    """
+
     imessage = "imessage"
     dashboard = "dashboard"
+    asi_one = "asi_one"
 
 
 class ApprovalDecision(StrEnum):
@@ -166,7 +171,11 @@ class Hold(BaseModel):
     kind: HoldKind
     release_at: AwareDatetime | None
     """
-    payment_auth: when the authorization is captured (end of the undo window). email_outbox: null, it sends on approval.
+    payment_auth: when the authorization is captured (end of the undo window); always before authorization_expires_at. email_outbox: null, it sends on approval.
+    """
+    authorization_expires_at: AwareDatetime | None
+    """
+    payment_auth: when the card authorization lapses (Stripe's capture_before; about 7 days for a customer-initiated Visa charge). release_at must come before it, or the capture fails and the money is never collected. null for email_outbox.
     """
     external_id: Annotated[str | None, Field(examples=["pi_3Q0example"])]
     """
@@ -314,12 +323,13 @@ class RewindJobStatus(StrEnum):
 
 class StepResult(StrEnum):
     """
-    pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. skipped: nothing to undo or nothing safe to do (read-only, an email already sent, a human reused a deleted row's key). failed: see detail.
+    pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. compensated: the effect couldn't be undone, so it was offset instead (a captured payment refunded, a correction email sent). skipped: nothing to undo or nothing safe to do (read-only, an email already sent with no correction, a human reused a deleted row's key). failed: see detail.
     """
 
     pending = "pending"
     restored = "restored"
     kept_human_edit = "kept_human_edit"
+    compensated = "compensated"
     skipped = "skipped"
     failed = "failed"
 
@@ -332,7 +342,7 @@ class FieldChangeOutcome(StrEnum):
 
 class FieldChange(BaseModel):
     """
-    One field a rewind step looks at. Values are JSON; for a whole row or table they are the row object or null when absent.
+    One field a rewind step looks at. before (the value before the agent's action, which the rewind restores), agent_value (what the agent wrote) and current (the value when the step was planned or run; it differs from agent_value if a human changed it) are each any JSON value: number, string, boolean, array, object, or null when absent. For a whole row or table they are the row object.
     """
 
     model_config = ConfigDict(
@@ -343,17 +353,8 @@ class FieldChange(BaseModel):
     A field path (see Action.after_hashes).
     """
     before: Any
-    """
-    Value before the agent's action. What the rewind restores.
-    """
     agent_value: Any
-    """
-    What the agent wrote.
-    """
     current: Any
-    """
-    Value when the step was planned or run. Differs from agent_value if a human changed it.
-    """
     outcome: FieldChangeOutcome
 
 
@@ -632,9 +633,15 @@ class NotifyApprovalRequest(BaseModel):
     """
     Plain text, under 300 characters, e.g. 'Claude Code wants to email 412 customers: "Price update"'.
     """
-    to: Annotated[str, Field(pattern="^\\+[1-9][0-9]{6,14}$")]
+    to: Annotated[
+        str,
+        Field(
+            examples=["+15555550123", "approver@icloud.com"],
+            pattern="^(\\+[1-9][0-9]{6,14}|[^@\\s]+@[^@\\s]+\\.[^@\\s]+)$",
+        ),
+    ]
     """
-    E.164.
+    The approver's iMessage handle (APPROVER_HANDLE): an E.164 phone number or an Apple ID email.
     """
 
 
@@ -651,7 +658,16 @@ class NotifySummaryRequest(BaseModel):
         Field(examples=["rwd_01M561RFRGVASABYV8XG40DDX0"], pattern="^rwd_[0-9A-HJKMNP-TV-Z]{26}$"),
     ]
     text: str
-    to: Annotated[str, Field(pattern="^\\+[1-9][0-9]{6,14}$")]
+    to: Annotated[
+        str,
+        Field(
+            examples=["+15555550123", "approver@icloud.com"],
+            pattern="^(\\+[1-9][0-9]{6,14}|[^@\\s]+@[^@\\s]+\\.[^@\\s]+)$",
+        ),
+    ]
+    """
+    The approver's iMessage handle (APPROVER_HANDLE): an E.164 phone number or an Apple ID email.
+    """
 
 
 class NotifyStatus(StrEnum):

@@ -71,7 +71,12 @@ class BasicHoldManager(HoldManager):
                     decided_by=None,
                     decision=None,
                 ),
-                "hold": Hold(kind=hold_kind, release_at=None, external_id=None)
+                "hold": Hold(
+                    kind=hold_kind,
+                    release_at=None,
+                    authorization_expires_at=None,
+                    external_id=None,
+                )
                 if hold_kind
                 else None,
             }
