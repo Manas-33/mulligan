@@ -99,18 +99,14 @@ class StripeTestOps:
     def status(self, payment_intent: str) -> str:
         return str(self.client.v1.payment_intents.retrieve(payment_intent).status)
 
-    # Idempotency keys, so a retried capture, cancel or refund can't run twice.
+    # Capture and cancel can't run twice anyway (Stripe answers a second one with a wrong-state
+    # error, which the callers resolve by reading the status), and Stripe would replay a cached
+    # error for 24 h under an idempotency key. A refund can be repeated, so it carries a key.
     def capture(self, payment_intent: str) -> str:
-        pi = self.client.v1.payment_intents.capture(
-            payment_intent, options={"idempotency_key": f"mulligan-{payment_intent}-capture"}
-        )
-        return str(pi.status)
+        return str(self.client.v1.payment_intents.capture(payment_intent).status)
 
     def cancel(self, payment_intent: str) -> str:
-        pi = self.client.v1.payment_intents.cancel(
-            payment_intent, options={"idempotency_key": f"mulligan-{payment_intent}-cancel"}
-        )
-        return str(pi.status)
+        return str(self.client.v1.payment_intents.cancel(payment_intent).status)
 
     def refund(self, payment_intent: str) -> str:
         refund = self.client.v1.refunds.create(
