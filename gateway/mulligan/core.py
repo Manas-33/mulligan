@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -50,7 +49,6 @@ def utcnow() -> datetime:
 _SECRET_KEY = re.compile(r"token|secret|passw|api[_-]?key|authorization|cookie|credential", re.I)
 _PLURALS = {"to": "recipients", "cc": "recipients", "bcc": "recipients", "rows": "rows"}
 MAX_STRING = 500
-IN_FLIGHT_WAIT_S = 300.0
 MAX_ITEMS = 50
 
 
@@ -120,27 +118,9 @@ class Gateway:
         self.upstream: dict[str, UpstreamToolSchema] = {}
         self.hold_manager: HoldManager | None = None
         self._locks: dict[System, asyncio.Lock] = {}
-        # Calls between being logged and settling (executed, failed or held), for the rewind.
-        self._in_flight: dict[str, asyncio.Event] = {}
 
     def lock_for(self, system: System) -> asyncio.Lock:
         return self._locks.setdefault(system, asyncio.Lock())
-
-    async def settled(self, action_id: str, timeout_s: float = IN_FLIGHT_WAIT_S) -> None:
-        """Wait (up to `timeout_s`) for a call this process is still running to settle."""
-        done = self._in_flight.get(action_id)
-        if done is not None:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(done.wait(), timeout_s)
-
-    @contextlib.contextmanager
-    def _running(self, action_id: str) -> Iterator[None]:
-        done = self._in_flight[action_id] = asyncio.Event()
-        try:
-            yield
-        finally:
-            self._in_flight.pop(action_id, None)
-            done.set()
 
     @property
     def builtin_tools(self) -> frozenset[str]:
@@ -202,23 +182,10 @@ class Gateway:
     # --- the pipeline -----------------------------------------------------------------------
 
     async def call_tool(self, session: Session, tool: str, args: dict[str, Any]) -> ToolResult:
-        classified = self.classify(tool)
-        action_id = new_id("act")
-        with self._running(action_id):
-            return await self._call_tool(session, tool, args, action_id, classified)
-
-    async def _call_tool(
-        self,
-        session: Session,
-        tool: str,
-        args: dict[str, Any],
-        action_id: str,
-        classified: tuple[System, Reversibility, bool, Any],
-    ) -> ToolResult:
-        system, reversibility, held, hold_kind = classified
+        system, reversibility, held, hold_kind = self.classify(tool)
         upstream_server = self.upstream[tool].server if system is System.upstream else None
         action = Action(
-            id=action_id,
+            id=new_id("act"),
             session_id=session.id,
             agent=session.agent,
             system=system,
@@ -271,20 +238,10 @@ class Gateway:
         action = await self.store.get(action_id)
         if action is None:
             raise LookupError(action_id)
-        session = await self.store.get_session(action.session_id)
         args = await self.store.take_held_call(action_id)
-        # A rewind may have rejected it (and dropped its arguments) since it was approved.
-        latest = await self.store.get(action_id) or action
-        if latest.status is not ActionStatus.approved:
-            return latest
         if args is None:
             raise LookupError(f"no stored arguments for {action_id}")
-        with self._running(action_id):
-            return await self._run_held(latest, args, session)
-
-    async def _run_held(
-        self, action: Action, args: dict[str, Any], session: Session | None
-    ) -> Action:
+        session = await self.store.get_session(action.session_id)
         call = ToolCall(
             action_id=action.id,
             session_id=action.session_id,
@@ -348,23 +305,21 @@ class Gateway:
                         summary=error,
                         is_error=True,
                     )
-            # Saved before the lock is let go, so a rewind waiting on it reads the inverse, and
-            # executed_at follows the order calls ran in on this system (the rewind's order).
-            action = action.model_copy(
-                update={
-                    "status": ActionStatus.executed,
-                    "summary": result.summary,
-                    "before_ref": before.ref,
-                    "after_ref": after.ref,
-                    "after_hashes": after.after_hashes,
-                    "inverse": inverse,
-                    "executed_at": utcnow(),
-                    "sentry_trace_id": trace_id,
-                }
-            )
-            await self.store.save(action)
-            if pre is not None:
-                await self.store.put_checksum(action.id, adapter.system, pre, None)
+        action = action.model_copy(
+            update={
+                "status": ActionStatus.executed,
+                "summary": result.summary,
+                "before_ref": before.ref,
+                "after_ref": after.ref,
+                "after_hashes": after.after_hashes,
+                "inverse": inverse,
+                "executed_at": utcnow(),
+                "sentry_trace_id": trace_id,
+            }
+        )
+        await self.store.save(action)
+        if pre is not None:
+            await self.store.put_checksum(action.id, adapter.system, pre, None)
         await self.bus.publish(EventName.action_executed, action)
         content = {**result.structured_content, "action_id": action.id, "status": "executed"}
         return action, result.model_copy(update={"structured_content": content})

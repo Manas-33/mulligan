@@ -26,7 +26,6 @@ from mulligan.adapters.notion.client import (
 )
 from mulligan.adapters.notion.normalize import (
     ABSENT,
-    CELL_SEP,
     OWN_PAGES,
     READ_ONLY_PROPS,
     ToolError,
@@ -92,13 +91,6 @@ def match_hash(form: dict[str, Any]) -> str:
     """What an appended block is recognized by when its id is unknown: its type and text. Notion
     adds defaults (annotations, color) to what was sent, so the whole form wouldn't match."""
     return sha([form["type"], form_text(form)])
-
-
-def sent_match(form: dict[str, Any], text: str) -> str:
-    """`match_hash` of a block once `text` replaced its text (cells trimmed, as Notion keeps)."""
-    if form["type"] == "table_row":
-        text = CELL_SEP.join(c.strip() for c in text.split(CELL_SEP.strip()))
-    return sha([form["type"], text])
 
 
 def appended_field(page_id: str, blk: dict[str, Any]) -> dict[str, Any]:
@@ -306,7 +298,6 @@ class NotionAdapter(Adapter):
             req_props[name] = {prop["type"]: prop_request(prop["type"], value)}
         nodes = {n["id"]: n for n in flat(snap["blocks"])}
         updates: dict[str, dict[str, Any]] = {}
-        texts: dict[str, str] = {}
         for item in updates_in:
             try:
                 block_id = normalize_id(str(item.get("block_id", "")))
@@ -315,58 +306,45 @@ class NotionAdapter(Adapter):
             if block_id not in nodes:
                 raise ToolError(f"block {block_id} isn't on this page")
             updates.pop(block_id, None)
-            texts[block_id] = str(item.get("text", ""))
-            updates[block_id] = text_update(block_form(nodes[block_id]), texts[block_id])
+            updates[block_id] = text_update(block_form(nodes[block_id]), str(item.get("text", "")))
         appends = [append_payload(item) for item in appends_in]
         if len(appends) > MAX_APPEND:
             raise ToolError(f"append at most {MAX_APPEND} blocks per call")
 
         fields: list[dict[str, Any]] = []
         hashes: dict[str, str] = {}
-        # The fields of the write in flight. Unless Notion refused it, it may have landed with
-        # its reply lost, so they are rolled back too (harmless if it never landed).
-        sending: list[dict[str, Any]] = []
         try:
             if req_props:
+                after = await self.client.update_page(page_id, properties=req_props)
                 for name in req_props:
-                    b = prop_form(props[name])
-                    sending.append(
+                    b, a = prop_form(props[name]), prop_form(after["properties"].get(name))
+                    key = f"notion:{page_id}/properties/{seg(name)}"
+                    fields.append(
                         {
-                            "key": f"notion:{page_id}/properties/{seg(name)}",
+                            "key": key,
                             "kind": "property",
                             "name": name,
                             "before": b,
                             "before_value": prop_value(b),
-                            "agent_value": None,
-                            # What was sent, so a rewind knows the agent's value if the reply
-                            # was lost (no hash from a response).
-                            "sent": props_in[name],
+                            "agent_value": prop_value(a),
                         }
                     )
-                after = await self.client.update_page(page_id, properties=req_props)
-                for f in sending:
-                    a = prop_form(after["properties"].get(f["name"]))
-                    f["agent_value"] = prop_value(a)
-                    hashes[f["key"]] = form_hash(a)
-                fields += sending
-                sending = []
+                    hashes[key] = form_hash(a)
             for block_id, payload in updates.items():
-                b = block_form(nodes[block_id])
-                f = {
-                    "key": f"notion:{page_id}/blocks/{block_id}",
-                    "kind": "block",
-                    "block_id": block_id,
-                    "before": b,
-                    "before_value": form_text(b),
-                    "agent_value": None,
-                    "sent_match": sent_match(b, texts[block_id]),
-                }
-                sending = [f]
                 after = await self.client.update_block(block_id, **payload)
-                f["agent_value"] = form_text(block_form(after))
-                hashes[f["key"]] = block_hash(after)
-                fields.append(f)
-                sending = []
+                b = block_form(nodes[block_id])
+                key = f"notion:{page_id}/blocks/{block_id}"
+                fields.append(
+                    {
+                        "key": key,
+                        "kind": "block",
+                        "block_id": block_id,
+                        "before": b,
+                        "before_value": form_text(b),
+                        "agent_value": form_text(block_form(after)),
+                    }
+                )
+                hashes[key] = block_hash(after)
             try:
                 appended = await self.client.append(page_id, appends) if appends else []
             except NotionWriteUnknown as exc:
@@ -398,16 +376,7 @@ class NotionAdapter(Adapter):
                 hashes[field["key"]] = block_hash(blk)
         except Errors as exc:
             # The call fails as a whole, and a failed action has no inverse: undo its writes now.
-            refused = isinstance(exc, NotionError) and 400 <= exc.status < 500
-            written = fields + ([] if refused else sending)
-            if await self._roll_back(page_id, written):
-                # Some writes may still be on the page: keep an inverse so a rewind checks them.
-                raise WriteUncertain(
-                    f"{exc} (rolling back this call's earlier changes failed)",
-                    before_ref=before.ref,
-                    inverse=self._inverse(call, before, written),
-                    after_hashes=hashes,
-                ) from exc
+            await self._roll_back(page_id, fields)
             raise ToolError(f"{exc} (this call's earlier changes were rolled back)") from exc
 
         before.state.update(fields=fields, after_hashes=hashes)
@@ -456,9 +425,7 @@ class NotionAdapter(Adapter):
         before.state["after_hashes"] = {key: trash_hash(bool(after.get("in_trash")))}
         return ToolResult(structured_content=content, summary=f'Moved "{title}" to the trash')
 
-    async def _roll_back(self, page_id: str, fields: list[dict[str, Any]]) -> list[str]:
-        """Put each field back; returns the keys that couldn't be."""
-        failed: list[str] = []
+    async def _roll_back(self, page_id: str, fields: list[dict[str, Any]]) -> None:
         for f in reversed(fields):
             try:
                 if f["kind"] == "property":
@@ -471,8 +438,6 @@ class NotionAdapter(Adapter):
                     await self.client.delete_block(f["block_id"])
             except Errors:
                 log.exception("rolling back %s failed", f["key"])
-                failed.append(f["key"])
-        return failed
 
     async def capture_after(self, call: ToolCall, before: Capture, result: ToolResult) -> Capture:
         return Capture(ref=before.ref, after_hashes=dict(before.state.get("after_hashes", {})))
@@ -580,12 +545,6 @@ class NotionAdapter(Adapter):
             restore: dict[str, Any] = {}
             for f in (f for f in rest if f["kind"] == "property"):
                 current = prop_form(page.get("properties", {}).get(f["name"]))
-                if (
-                    f["key"] not in agent_hashes
-                    and "sent" in f
-                    and prop_value(current) == f["sent"]
-                ):
-                    agent_hashes[f["key"]] = form_hash(current)  # its reply was lost; it landed
                 if decide(f, form_hash(current), prop_value(current)):
                     restore[f["name"]] = restore_prop(f["before"])
             if restore and apply:
@@ -595,13 +554,6 @@ class NotionAdapter(Adapter):
             for f in (f for f in rest if f["kind"] == "block"):
                 blk = await self._block(f["block_id"])
                 h = block_hash(blk, in_trash)
-                if (
-                    f["key"] not in agent_hashes
-                    and f.get("sent_match")
-                    and blk is not None
-                    and match_hash(block_form(blk)) == f["sent_match"]
-                ):
-                    agent_hashes[f["key"]] = h  # its reply was lost; it landed
                 shown = form_text(block_form(blk)) if blk is not None and h != ABSENT else None
                 if decide(f, h, shown):
                     done["block"] += 1

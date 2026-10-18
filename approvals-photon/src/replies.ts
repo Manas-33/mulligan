@@ -2,24 +2,15 @@
 // Stateless: the code is looked up among the gateway's held actions, so a restart loses nothing.
 
 import { GatewayError, type Gateway } from "./gateway.ts";
-import { parseReply, sameHandle } from "./parse.ts";
+import { parseReply } from "./parse.ts";
 import type { InboundText, Messenger } from "./photon.ts";
 
 export type ReplyLog = (line: string) => void;
-
-const CLOCK_SKEW_MS = 60_000;
 /** Where loop errors go besides the log (Sentry in main.ts). */
 export type OnError = (error: unknown) => void;
 
-/** Handle one inbound text. Returns what happened, for logs and tests. Only the approver's texts
- * count: anyone can text the shared line, and a reply to a stranger would confirm codes. */
-export async function handleReply(
-  msg: InboundText,
-  messenger: Messenger,
-  gateway: Gateway,
-  approver: string,
-): Promise<string> {
-  if (!sameHandle(msg.from, approver)) return "not-approver";
+/** Handle one inbound text. Returns what happened, for logs and tests. */
+export async function handleReply(msg: InboundText, messenger: Messenger, gateway: Gateway): Promise<string> {
   const parsed = parseReply(msg.text);
   const say = (text: string) => messenger.send(msg.conversation, text, `mulligan-reply-${msg.id}`);
 
@@ -34,13 +25,6 @@ export async function handleReply(
 
   const held = await gateway.heldActions();
   const action = held.find((a) => a.approval?.code === parsed.code);
-  const requestedAt = action?.approval?.requested_at;
-  // Photon's clock and the gateway's can disagree by a little: allow a minute.
-  if (action && requestedAt && Date.parse(msg.createdAt) < Date.parse(requestedAt) - CLOCK_SKEW_MS) {
-    // Sent before this request went out: a late or repeated answer to an earlier hold that had
-    // the same code. Saying nothing is safer than deciding the new one.
-    return "stale";
-  }
   if (!action) {
     await say(`No request is waiting with code ${parsed.code}. It may have expired or been decided.`);
     return "no-match";
@@ -90,7 +74,6 @@ export function streak(onError: OnError) {
 export async function replyLoop(
   messenger: Messenger,
   gateway: Gateway,
-  approver: string,
   opts: { intervalMs?: number; signal?: AbortSignal; log?: ReplyLog; onError?: OnError; now?: () => Date } = {},
 ): Promise<void> {
   const { intervalMs = 1000, signal, log = console.log, onError = () => {}, now = () => new Date() } = opts;
@@ -103,7 +86,7 @@ export async function replyLoop(
         if (seen.has(msg.id)) continue;
         seen.add(msg.id);
         since = msg.createdAt > since ? msg.createdAt : since;
-        log(`reply ${msg.id.slice(-6)}: ${await handleReply(msg, messenger, gateway, approver)}`);
+        log(`reply ${msg.id.slice(-6)}: ${await handleReply(msg, messenger, gateway)}`);
       }
       report.ok();
     } catch (e) {

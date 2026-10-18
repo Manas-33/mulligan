@@ -29,7 +29,6 @@ from mulligan_fetch.mulligan_api import MulliganAPI
 
 HERE = Path(__file__).resolve().parents[1]
 config = Config.from_env()
-config.check_seeds()
 
 guardian = Agent(
     name="mulligan-guardian",

@@ -22,7 +22,7 @@ server.listen(config.port, config.host, () => {
 });
 
 const gateway = httpGateway(config.gatewayUrl, config.serviceToken);
-void replyLoop(messenger, gateway, config.approverHandle, { signal: stop.signal, onError: (e) => report(e, "reply-loop") });
+void replyLoop(messenger, gateway, { signal: stop.signal, onError: (e) => report(e, "reply-loop") });
 // Text the approver a summary whenever a rewind finishes.
 void summaryLoop(gateway, messenger, config.approverHandle, {
   signal: stop.signal,

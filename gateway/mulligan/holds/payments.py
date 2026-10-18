@@ -22,14 +22,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, Protocol
 
 from mulligan.holds.notify import holds_env
-from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult, WriteUncertain
+from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult
 from mulligan.models import Action, Inverse, RewindStep, StepResult, System
 
 CANCEL = "payments.cancel_authorization"
 REFUND = "payments.refund"
 DEFAULT_UNDO_WINDOW = timedelta(minutes=10)
-# Amounts are in cents, so only currencies with two decimal places (JPY has none, KWD three).
-CURRENCIES = frozenset({"usd", "eur", "gbp", "cad", "aud"})
 CAPTURE_MARGIN = timedelta(hours=1)
 """Capture at least this long before the authorization lapses."""
 
@@ -83,12 +81,9 @@ class StripeTestOps:
             },
             options={"idempotency_key": f"mulligan-{action_id}"},
         )
-        try:
-            charge = self.client.v1.charges.retrieve(str(pi.latest_charge))
-            details = charge.payment_method_details
-            capture_before = details.card.capture_before if details and details.card else None
-        except Exception:  # noqa: BLE001 (the card is authorized either way; assume the floor)
-            capture_before = None
+        charge = self.client.v1.charges.retrieve(str(pi.latest_charge))
+        details = charge.payment_method_details
+        capture_before = details.card.capture_before if details and details.card else None
         when = (
             datetime.fromtimestamp(capture_before, UTC)
             if capture_before
@@ -99,9 +94,6 @@ class StripeTestOps:
     def status(self, payment_intent: str) -> str:
         return str(self.client.v1.payment_intents.retrieve(payment_intent).status)
 
-    # Capture and cancel can't run twice anyway (Stripe answers a second one with a wrong-state
-    # error, which the callers resolve by reading the status), and Stripe would replay a cached
-    # error for 24 h under an idempotency key. A refund can be repeated, so it carries a key.
     def capture(self, payment_intent: str) -> str:
         return str(self.client.v1.payment_intents.capture(payment_intent).status)
 
@@ -109,11 +101,7 @@ class StripeTestOps:
         return str(self.client.v1.payment_intents.cancel(payment_intent).status)
 
     def refund(self, payment_intent: str) -> str:
-        refund = self.client.v1.refunds.create(
-            {"payment_intent": payment_intent},
-            options={"idempotency_key": f"mulligan-{payment_intent}-refund"},
-        )
-        return str(refund.status)
+        return str(self.client.v1.refunds.create({"payment_intent": payment_intent}).status)
 
 
 def undo_window() -> timedelta:
@@ -166,38 +154,12 @@ class PaymentsAdapter(Adapter):
     async def execute(self, call: ToolCall, before: Capture) -> ToolResult:
         amount = int(call.args["amount_cents"])
         currency = str(call.args.get("currency") or "usd").lower()
-        if currency not in CURRENCIES:
-            return ToolResult(
-                structured_content={"error": f"unsupported currency {currency}"},
-                summary=f"Unsupported currency {currency}; use {', '.join(sorted(CURRENCIES))}",
-                is_error=True,
-            )
         description = str(call.args.get("description") or "")
         auth: Authorization = await self._run(
             self.ops.authorize, call.action_id, amount, currency, description
         )
         if auth.status != "requires_capture":
-            # Not an authorization we can hold and undo: don't leave it standing on the card.
-            try:
-                await self._run(self.ops.cancel, auth.payment_intent)
-            except Exception as exc:  # noqa: BLE001
-                inverse = Inverse(
-                    kind=CANCEL,
-                    payload={
-                        "payment_intent": auth.payment_intent,
-                        "capture_before": auth.capture_before.isoformat(),
-                        "amount_cents": amount,
-                        "currency": currency,
-                        "customer_id": str(call.args.get("customer_id") or ""),
-                    },
-                )
-                raise WriteUncertain(
-                    f"authorization not held (Stripe status {auth.status}) and cancelling it"
-                    f" failed: {exc}",
-                    before_ref=None,
-                    inverse=inverse,
-                ) from exc
-            raise RuntimeError(f"authorization not held (Stripe status {auth.status}); cancelled")
+            raise RuntimeError(f"authorization not held (Stripe status {auth.status})")
         before.state.update(
             payment_intent=auth.payment_intent,
             capture_before=auth.capture_before.isoformat(),
@@ -242,15 +204,8 @@ class PaymentsAdapter(Adapter):
         try:
             status = await self._run(self.ops.status, pi)
             if status == "requires_capture":
-                try:
-                    await self._run(self.ops.cancel, pi)
-                    return _step(
-                        action, StepResult.restored, f"Cancelled the {amount} authorization."
-                    )
-                except Exception:  # noqa: BLE001 (the capture may have won the race: re-read)
-                    status = await self._run(self.ops.status, pi)
-                    if status == "requires_capture":
-                        raise
+                await self._run(self.ops.cancel, pi)
+                return _step(action, StepResult.restored, f"Cancelled the {amount} authorization.")
             if status == "succeeded":
                 await self._run(self.ops.refund, pi)
                 return _step(action, StepResult.compensated, f"Refunded {amount} (was captured).")
@@ -263,16 +218,7 @@ class PaymentsAdapter(Adapter):
     async def capture(self, action: Action) -> str:
         """Collect the money (called by the hold manager when the undo window ends)."""
         assert action.inverse is not None
-        pi = action.inverse.payload["payment_intent"]
-        try:
-            return str(await self._run(self.ops.capture, pi))
-        except Exception:
-            # A capture that timed out may have gone through, and a cancelled one never will:
-            # either way Stripe's status says what to do next.
-            status = str(await self._run(self.ops.status, pi))
-            if status in ("succeeded", "canceled"):
-                return status
-            raise
+        return str(await self._run(self.ops.capture, action.inverse.payload["payment_intent"]))
 
     async def checksum(self) -> str | None:
         return None  # a held channel: nothing to verify by hash
