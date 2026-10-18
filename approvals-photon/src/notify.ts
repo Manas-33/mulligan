@@ -37,7 +37,7 @@ export function approvalText(req: NotifyApprovalRequest): string {
   return `Mulligan: ${req.summary}\nReply YES ${req.code} to approve or NO ${req.code} to reject.`;
 }
 
-async function deliver(messenger: Messenger, to: string, text: string, key: string): Promise<Reply> {
+export async function deliver(messenger: Messenger, to: string, text: string, key: string): Promise<Reply> {
   const convo = await messenger.findConversation(to);
   if (!convo) return notReachable;
   try {
@@ -59,5 +59,8 @@ export async function notifyApproval(messenger: Messenger, body: unknown): Promi
 export async function notifySummary(messenger: Messenger, body: unknown): Promise<Reply> {
   const req = validateSummary(body);
   if (typeof req === "string") return invalid(req);
-  return deliver(messenger, req.to, `Mulligan: ${req.text}`, `mulligan-summary-${req.rewind_job_id}`);
+  return deliver(messenger, req.to, `Mulligan: ${req.text}`, summaryKey(req.rewind_job_id));
 }
+
+/** One summary per rewind, however it's triggered (the watcher or POST /notify/summary). */
+export const summaryKey = (rewindJobId: string) => `mulligan-summary-${rewindJobId}`;
