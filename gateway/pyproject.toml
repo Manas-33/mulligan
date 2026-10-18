@@ -70,6 +70,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: needs docker compose up (both Postgres DBs)",
-    "live: writes to the real GitHub test repo (MULLIGAN_LIVE_GITHUB=1, plus `make db`)",
+    "live: talks to the real GitHub test repo or Notion workspace (MULLIGAN_LIVE_GITHUB=1 / MULLIGAN_LIVE_NOTION=1; GitHub also needs `make db`)",
 ]
 addopts = "-m 'not integration and not live'"

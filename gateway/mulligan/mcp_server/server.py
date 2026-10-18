@@ -115,6 +115,27 @@ Filters: Any = Field(default_factory=list, description="Conditions, ANDed. Empty
 All: Any = Field(default=False, description="Set true to touch every row when the filter is empty.")
 
 
+class BlockUpdate(BaseModel):
+    block_id: str
+    text: str = Field(description="New plain text. Table rows: cells separated by ' | '.")
+
+
+class AppendBlock(BaseModel):
+    type: Literal[
+        "paragraph",
+        "heading_1",
+        "heading_2",
+        "heading_3",
+        "bulleted_list_item",
+        "numbered_list_item",
+        "to_do",
+        "quote",
+        "callout",
+        "code",
+    ]
+    text: str
+
+
 def build_mcp(settings: Settings, gateway: Gateway) -> tuple[MCPServer, AgentTokenVerifier]:
     verifier = AgentTokenVerifier(dict(settings.agent_tokens))
     mcp = MCPServer(
@@ -249,6 +270,42 @@ def build_mcp(settings: Settings, gateway: Gateway) -> tuple[MCPServer, AgentTok
     ) -> CallToolResult:
         args = {"path": path, "content": content, "message": message, "branch": branch}
         return await run("github_update_file", args, ctx)
+
+    @tool("notion_get_page", "Read a Notion page: title, properties and blocks.", read)
+    async def notion_get_page(
+        ctx: Context,
+        page_id: str | None = Field(default=None, description="Defaults to the pricing page."),
+    ) -> CallToolResult:
+        return await run("notion_get_page", {"page_id": page_id}, ctx)
+
+    @tool(
+        "notion_update_page",
+        "Edit a Notion page: set properties, replace blocks' text (type and id are kept) and"
+        " append blocks at the end. Give at least one of the three.",
+        write,
+    )
+    async def notion_update_page(
+        ctx: Context,
+        page_id: str,
+        properties: dict[str, Any] | None = Field(
+            default=None,
+            description="Property name -> value: text as a string, number, select as a string,"
+            " multi-select as a list of strings, checkbox, date as an ISO string.",
+        ),
+        block_updates: list[BlockUpdate] | None = None,
+        append_blocks: list[AppendBlock] | None = None,
+    ) -> CallToolResult:
+        args = {
+            "page_id": page_id,
+            "properties": properties,
+            "block_updates": [b.model_dump() for b in block_updates or []] or None,
+            "append_blocks": [b.model_dump() for b in append_blocks or []] or None,
+        }
+        return await run("notion_update_page", args, ctx)
+
+    @tool("notion_trash_page", "Move a Notion page to the trash.", write)
+    async def notion_trash_page(ctx: Context, page_id: str) -> CallToolResult:
+        return await run("notion_trash_page", {"page_id": page_id}, ctx)
 
     @tool("email_send", "Send an email. Waits for a human's approval before it is sent.", write)
     async def email_send(

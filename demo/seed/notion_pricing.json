@@ -1,0 +1,325 @@
+{
+ "title": "Acme Widgets — Pricing",
+ "in_trash": false,
+ "properties": {
+  "title": {
+   "type": "title",
+   "title": [
+    {
+     "type": "text",
+     "text": {
+      "content": "Acme Widgets — Pricing"
+     },
+     "annotations": {
+      "bold": false,
+      "italic": false,
+      "strikethrough": false,
+      "underline": false,
+      "code": false,
+      "color": "default"
+     }
+    }
+   ]
+  }
+ },
+ "blocks": [
+  {
+   "id": "3fc2da88-3be3-8074-8a7a-c2118c34f04a",
+   "type": "heading_1",
+   "body": {
+    "rich_text": [
+     {
+      "type": "text",
+      "text": {
+       "content": "Pricing"
+      },
+      "annotations": {
+       "bold": false,
+       "italic": false,
+       "strikethrough": false,
+       "underline": false,
+       "code": false,
+       "color": "default"
+      }
+     }
+    ],
+    "is_toggleable": false,
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-8088-8bc0-fdd2307aba6e",
+   "type": "paragraph",
+   "body": {
+    "rich_text": [
+     {
+      "type": "text",
+      "text": {
+       "content": "Prices for Acme Widgets plans, effective October 2026."
+      },
+      "annotations": {
+       "bold": false,
+       "italic": false,
+       "strikethrough": false,
+       "underline": false,
+       "code": false,
+       "color": "default"
+      }
+     }
+    ],
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-80c6-820a-eb3b431881ed",
+   "type": "bulleted_list_item",
+   "body": {
+    "rich_text": [
+     {
+      "type": "text",
+      "text": {
+       "content": "Starter: $29/month"
+      },
+      "annotations": {
+       "bold": false,
+       "italic": false,
+       "strikethrough": false,
+       "underline": false,
+       "code": false,
+       "color": "default"
+      }
+     }
+    ],
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-80a1-83af-e6b1ba7cc6fe",
+   "type": "bulleted_list_item",
+   "body": {
+    "rich_text": [
+     {
+      "type": "text",
+      "text": {
+       "content": "Pro: $99/month"
+      },
+      "annotations": {
+       "bold": false,
+       "italic": false,
+       "strikethrough": false,
+       "underline": false,
+       "code": false,
+       "color": "default"
+      }
+     }
+    ],
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-806e-bae9-d784b0aef638",
+   "type": "bulleted_list_item",
+   "body": {
+    "rich_text": [
+     {
+      "type": "text",
+      "text": {
+       "content": "Enterprise: $499/month"
+      },
+      "annotations": {
+       "bold": false,
+       "italic": false,
+       "strikethrough": false,
+       "underline": false,
+       "code": false,
+       "color": "default"
+      }
+     }
+    ],
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-8041-a9d1-d7247338a06d",
+   "type": "to_do",
+   "body": {
+    "rich_text": [
+     {
+      "type": "text",
+      "text": {
+       "content": "Review enterprise discount with sales"
+      },
+      "annotations": {
+       "bold": false,
+       "italic": false,
+       "strikethrough": false,
+       "underline": false,
+       "code": false,
+       "color": "default"
+      }
+     }
+    ],
+    "checked": false,
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-80e2-879d-d91e272867ee",
+   "type": "table",
+   "body": {
+    "table_width": 2,
+    "has_column_header": false,
+    "has_row_header": false
+   },
+   "children": [
+    {
+     "id": "3fc2da88-3be3-8019-a0e7-cf598e9f2692",
+     "type": "table_row",
+     "body": {
+      "cells": [
+       [
+        {
+         "type": "text",
+         "text": {
+          "content": "Product"
+         },
+         "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+         }
+        }
+       ],
+       [
+        {
+         "type": "text",
+         "text": {
+          "content": "Price"
+         },
+         "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+         }
+        }
+       ]
+      ]
+     },
+     "children": []
+    },
+    {
+     "id": "3fc2da88-3be3-8088-8f47-c802d0a5025e",
+     "type": "table_row",
+     "body": {
+      "cells": [
+       [
+        {
+         "type": "text",
+         "text": {
+          "content": "Widget Basic"
+         },
+         "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+         }
+        }
+       ],
+       [
+        {
+         "type": "text",
+         "text": {
+          "content": "$12"
+         },
+         "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+         }
+        }
+       ]
+      ]
+     },
+     "children": []
+    },
+    {
+     "id": "3fc2da88-3be3-80cf-bd9d-eb8819a63e84",
+     "type": "table_row",
+     "body": {
+      "cells": [
+       [
+        {
+         "type": "text",
+         "text": {
+          "content": "Widget Pro"
+         },
+         "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+         }
+        }
+       ],
+       [
+        {
+         "type": "text",
+         "text": {
+          "content": "$45"
+         },
+         "annotations": {
+          "bold": false,
+          "italic": false,
+          "strikethrough": false,
+          "underline": false,
+          "code": false,
+          "color": "default"
+         }
+        }
+       ]
+      ]
+     },
+     "children": []
+    }
+   ]
+  },
+  {
+   "id": "3fc2da88-3be3-80d6-80e4-d71057354634",
+   "type": "paragraph",
+   "body": {
+    "rich_text": [],
+    "color": "default"
+   },
+   "children": []
+  },
+  {
+   "id": "3fc2da88-3be3-80a7-b3e5-c3eb50c61f1e",
+   "type": "paragraph",
+   "body": {
+    "rich_text": [],
+    "color": "default"
+   },
+   "children": []
+  }
+ ]
+}
