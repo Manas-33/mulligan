@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "../src/state.ts";
+import { currentSession, empty, heldActions, latestRewind, reduce, sessionList, timeline } from "../src/state.ts";
 import type { Action, MulliganEvent, Session } from "../src/types.ts";
 
 const session = (id: string, started_at: string) => ({ id, started_at }) as Session;
@@ -33,6 +33,25 @@ describe("state", () => {
     expect(Object.keys(s.sessions)).toEqual(["ses_a"]);
     expect(s.actions.act_01!.status).toBe("reverted");
     expect(s.lastSeq).toBe(3);
+  });
+
+  it("clears everything on demo.reset but keeps counting seqs", () => {
+    let s = reduce(empty, ev(1, "session.started", session("ses_a", "2026-10-18T01:00:00Z")));
+    s = reduce(s, ev(2, "action.held", action("act_01", "held")));
+    s = reduce(s, { type: "rewind", job: { id: "rwd_1", scope: { session_id: "ses_a" } } as never });
+    s = reduce(s, ev(3, "demo.reset", { ok: true, checksums: {} }));
+    expect(s).toEqual({ ...empty, lastSeq: 3 });
+    s = reduce(s, ev(4, "session.started", session("ses_b", "2026-10-18T02:00:00Z")));
+    expect(Object.keys(s.sessions)).toEqual(["ses_b"]);
+  });
+
+  it("falls back to the newest session when the selected one is gone", () => {
+    let s = reduce(empty, ev(1, "session.started", session("ses_a", "2026-10-18T01:00:00Z")));
+    s = reduce(s, ev(2, "session.started", session("ses_b", "2026-10-18T02:00:00Z")));
+    expect(currentSession(s, "ses_a")).toBe("ses_a");
+    expect(currentSession(s, null)).toBe("ses_b");
+    expect(currentSession(s, "ses_gone")).toBe("ses_b");
+    expect(currentSession(empty, "ses_gone")).toBeNull();
   });
 });
 

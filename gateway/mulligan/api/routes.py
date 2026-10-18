@@ -27,6 +27,7 @@ from mulligan.models import (
     AgentKind,
     ApprovalDecisionRequest,
     DemoResetResult,
+    EventName,
     RewindJob,
     RewindRequest,
     Session,
@@ -194,7 +195,10 @@ async def demo_reset(svc: Svc) -> DemoResetResult:
         await reset()
     await svc.store.clear()
     current = await svc.current_checksums(recompute=True)
-    return DemoResetResult(
+    result = DemoResetResult(
         ok=True,
         checksums={k: SystemChecksum(hash=h, computed_at=t) for k, (h, t) in current.items()},
     )
+    # Open dashboards drop what they show and load the (now empty) log again.
+    await svc.bus.publish(EventName.demo_reset, result)
+    return result

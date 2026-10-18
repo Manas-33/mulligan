@@ -119,7 +119,8 @@ export type EventName =
   | "rewind.failed"
   | "checksum.verified"
   | "hold.released"
-  | "hold.expired";
+  | "hold.expired"
+  | "demo.reset";
 /**
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "SessionEventName".
@@ -155,12 +156,18 @@ export type RewindStepEventName = "rewind.step";
  */
 export type ChecksumEventName = "checksum.verified";
 /**
+ * This interface was referenced by `MulliganContracts`'s JSON-Schema
+ * via the `definition` "DemoResetEventName".
+ */
+export type DemoResetEventName = "demo.reset";
+/**
  * Envelope of every SSE and internal-bus event. Narrow on `event`.
  *
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "MulliganEvent".
  */
-export type MulliganEvent = SessionEvent | ActionEvent | RewindJobEvent | RewindStepEvent | ChecksumEvent;
+export type MulliganEvent =
+  SessionEvent | ActionEvent | RewindJobEvent | RewindStepEvent | ChecksumEvent | DemoResetEvent;
 /**
  * This interface was referenced by `MulliganContracts`'s JSON-Schema
  * via the `definition` "NotifyStatus".
@@ -550,6 +557,16 @@ export interface ChecksumEvent {
   seq: number;
   ts: string;
   data: ChecksumVerifiedData;
+}
+/**
+ * This interface was referenced by `MulliganContracts`'s JSON-Schema
+ * via the `definition` "DemoResetEvent".
+ */
+export interface DemoResetEvent {
+  event: DemoResetEventName;
+  seq: number;
+  ts: string;
+  data: DemoResetResult;
 }
 /**
  * Gateway -> Photon service: text the approver a code for a held action.

@@ -496,6 +496,7 @@ class EventName(StrEnum):
     checksum_verified = "checksum.verified"
     hold_released = "hold.released"
     hold_expired = "hold.expired"
+    demo_reset = "demo.reset"
 
 
 class SessionEventName(StrEnum):
@@ -528,6 +529,10 @@ class RewindStepEventName(StrEnum):
 
 class ChecksumEventName(StrEnum):
     checksum_verified = "checksum.verified"
+
+
+class DemoResetEventName(StrEnum):
+    demo_reset = "demo.reset"
 
 
 class SessionEvent(BaseModel):
@@ -607,10 +612,34 @@ class ChecksumEvent(BaseModel):
     data: ChecksumVerifiedData
 
 
+class DemoResetEvent(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    event: DemoResetEventName
+    seq: Annotated[int, Field(ge=1)]
+    ts: AwareDatetime
+    data: DemoResetResult
+
+
 class MulliganEvent(
-    RootModel[SessionEvent | ActionEvent | RewindJobEvent | RewindStepEvent | ChecksumEvent]
+    RootModel[
+        SessionEvent
+        | ActionEvent
+        | RewindJobEvent
+        | RewindStepEvent
+        | ChecksumEvent
+        | DemoResetEvent
+    ]
 ):
-    root: SessionEvent | ActionEvent | RewindJobEvent | RewindStepEvent | ChecksumEvent
+    root: (
+        SessionEvent
+        | ActionEvent
+        | RewindJobEvent
+        | RewindStepEvent
+        | ChecksumEvent
+        | DemoResetEvent
+    )
     """
     Envelope of every SSE and internal-bus event. Narrow on `event`.
     """

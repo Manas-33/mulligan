@@ -92,7 +92,11 @@ class FakeAPI:
         ("approve 4821", "approve"),
         ("reject 4821 please", "reject"),
         ("do the quarter-end cleanup", "task"),
-        ("approve the budget", "task"),
+        ("approve the budget", "help"),
+        ("thanks", "help"),
+        ("what can you do?", "help"),
+        ("task: clean up stale data", "task"),
+        ("Run the Q3 close", "task"),
     ],
 )
 def test_parse_text(text: str, kind: str) -> None:

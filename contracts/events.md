@@ -1,6 +1,6 @@
 # Events
 
-The gateway publishes every state change on an internal bus and streams the same events to `GET /api/events` (SSE). Names and payloads are identical in both places. The envelope types are in `action.schema.json` (`MulliganEvent` and the five `*Event` types), and in the generated `models.py` and `types.ts`.
+The gateway publishes every state change on an internal bus and streams the same events to `GET /api/events` (SSE). Names and payloads are identical in both places. The envelope types are in `action.schema.json` (`MulliganEvent` and the six `*Event` types), and in the generated `models.py` and `types.ts`.
 
 ## Envelope
 
@@ -34,6 +34,7 @@ The gateway publishes every state change on an internal bus and streams the same
 | `checksum.verified` | `ChecksumVerifiedData` (`{system, expected, actual, ok, rewind_job_id}`) | A system's checksum was compared after a rewind (or by the demo) |
 | `hold.released` | `Action` | A held action's hold ended and it went ahead: the email sent, or the payment was captured |
 | `hold.expired` | `Action` | Nobody decided in time. Status `expired` |
+| `demo.reset` | `DemoResetResult` (`{ok, checksums}`) | `POST /api/demo/reset` reseeded the demo systems and cleared the log. Drop everything you hold and load the REST snapshot again |
 
 A held action that is approved emits `action.approved`, then `hold.released` and `action.executed` once it runs. A payment emits `action.executed` when it is authorized, and `hold.released` later when it is captured.
 
