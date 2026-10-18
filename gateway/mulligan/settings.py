@@ -90,9 +90,15 @@ class Settings:
     pg_query_timeout_ms: int = 5000
     pg_query_max_rows: int = 1000
     pg_allowed_schemas: tuple[str, ...] = ("public",)
+    notion_token: str = ""
+    notion_pricing_page_id: str = ""
     policy_path: Path = REPO_ROOT / "contracts" / "reversibility_policy.yaml"
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
+    github_token: str = ""
+    github_org: str = ""
+    github_repo: str = ""
+    github_write_interval_ms: int = 1000
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -124,7 +130,13 @@ class Settings:
             pg_query_timeout_ms=int(get("PG_QUERY_TIMEOUT_MS", "5000")),
             pg_query_max_rows=int(get("PG_QUERY_MAX_ROWS", "1000")),
             pg_allowed_schemas=csv("PG_ALLOWED_SCHEMAS", "public"),
+            notion_token=get("NOTION_TOKEN"),
+            notion_pricing_page_id=get("NOTION_PRICING_PAGE_ID"),
             policy_path=Path(get("MULLIGAN_POLICY_PATH", str(cls.policy_path))),
             sentry_dsn=get("SENTRY_DSN_GATEWAY"),
             sentry_environment=get("SENTRY_ENVIRONMENT", "dev"),
+            github_token=get("GITHUB_TOKEN"),
+            github_org=get("GITHUB_ORG"),
+            github_repo=get("GITHUB_REPO"),
+            github_write_interval_ms=int(get("GITHUB_WRITE_INTERVAL_MS", "1000")),
         )
