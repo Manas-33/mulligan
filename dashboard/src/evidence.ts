@@ -9,14 +9,22 @@ export type Shot = { src: string; alt: string; caption: string };
 export const EVIDENCE = {
   sentry: {
     /** The ValueError event in the mulligan-gateway project. */
-    crashEventUrl: null as string | null,
-    /** A rewind's trace: mulligan.rewind with its mulligan.rewind.step spans across systems. */
-    rewindTraceUrl: null as string | null,
+    crashEventUrl: "https://mulligan.sentry.io/issues/7798347560/" as string | null,
+    /** Agent actions as mulligan.action spans (Explore → Traces, span.op:mulligan.action). */
+    actionSpansUrl: "https://mulligan.sentry.io/explore/traces/?query=span.op%3Amulligan.action&statsPeriod=14d" as string | null,
     /** The commit the crash led to (a/p4-e2e-fixes). */
     fixCommit: "e71db3ffaab2f35ad6cc02cda09415151be6689c",
     shots: [
-      { src: "/evidence/sentry-crash.png", alt: "Sentry issue: ValueError bad upstream server name '# e.g. slack'", caption: "The startup crash, as Sentry caught it." },
-      { src: "/evidence/sentry-rewind-trace.png", alt: "Sentry trace of a rewind with one span per step", caption: "One rewind: a span per step, across Postgres, GitHub and Notion." },
+      {
+        src: "/evidence/sentry-crash.jpg",
+        alt: "Sentry issue MULLIGAN-GATEWAY-5: the parse_servers frame, with spec = '# e.g. slack=http://localhost:8200/mcp' in its local variables",
+        caption: "MULLIGAN-GATEWAY-5. The frame’s local variables show the comment arriving as the setting’s value.",
+      },
+      {
+        src: "/evidence/sentry-action-spans.png",
+        alt: "Sentry Explore: mulligan.action spans for Postgres, GitHub and Notion tools in one demo run",
+        caption: "One demo run: a span per agent action, across Postgres, GitHub and Notion.",
+      },
     ] satisfies Shot[],
   },
   paper: {

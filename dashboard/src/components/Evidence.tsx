@@ -79,13 +79,14 @@ function Hole({ id, n, title, par, children }: { id: string; n: number; title: s
 // --- Hole 1: Sentry --------------------------------------------------------------------------
 
 function SentryHole() {
-  const { crashEventUrl, rewindTraceUrl, fixCommit, shots } = EVIDENCE.sentry;
+  const { crashEventUrl, actionSpansUrl, fixCommit, shots } = EVIDENCE.sentry;
   return (
     <Hole id="hole-sentry" n={1} title="Sentry caught the gateway falling over" par="error → root cause → commit">
       <div className="notes">
         <ol className="steps">
           <Step mark="1" title="The gateway crashed on startup under Docker Compose.">
-            Sentry was already on, so the crash came in as an issue with its stack trace:
+            Sentry was already on, so the crash came in as an issue (MULLIGAN-GATEWAY-5) with its stack trace and the frame’s
+            local variables:
             <pre className="mono trace-line">ValueError: bad upstream server name '# e.g. slack'</pre>
             {crashEventUrl && <ExtLink href={crashEventUrl}>Open the event in Sentry</ExtLink>}
           </Step>
@@ -115,13 +116,13 @@ function SentryHole() {
       <h3 className="notes-title">What else Sentry watches</h3>
       <ul className="products">
         <Product name="Tracing" where="gateway">
-          A span for every agent action (<code className="mono">mulligan.action</code>) and for every rewind and each of its steps (
-          <code className="mono">mulligan.rewind</code>, <code className="mono">mulligan.rewind.step</code>). The dashboard links each
-          action to its trace, and sends trace headers with every request so the gateway’s spans continue the browser’s trace.
-          {rewindTraceUrl && (
+          A span for every agent action (<code className="mono">mulligan.action</code>) with its system and action id, so one demo run
+          reads as a list of tool calls with timings. The dashboard links each action to its trace and sends trace headers with every
+          request.
+          {actionSpansUrl && (
             <>
               {" "}
-              <ExtLink href={rewindTraceUrl}>A rewind’s trace</ExtLink>
+              <ExtLink href={actionSpansUrl}>Action spans</ExtLink>
             </>
           )}
         </Product>
