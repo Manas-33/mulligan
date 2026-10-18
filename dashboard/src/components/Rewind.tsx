@@ -25,11 +25,14 @@ type Props = {
   actions: Record<string, Action>;
   /** The newest job for this session from live state (events and polling). */
   live?: RewindJob;
+  /** Rewind back to (and including) this action; the whole round when unset. */
+  from?: Action;
   onJob: (job: RewindJob) => void;
   onClose: () => void;
 };
 
-export function Rewind({ client, session, actions, live, onJob, onClose }: Props) {
+export function Rewind({ client, session, actions, live, from, onJob, onClose }: Props) {
+  const since = from?.created_at;
   const [plan, setPlan] = useState<RewindJob | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,7 +43,7 @@ export function Rewind({ client, session, actions, live, onJob, onClose }: Props
     setBusy(true);
     setError(null);
     try {
-      const job = await client.rewind({ session_id: session.id }, dryRun);
+      const job = await client.rewind(since ? { session_id: session.id, since } : { session_id: session.id }, dryRun);
       onJob(job);
       if (dryRun) setPlan(job);
       else setRunId(job.id);
@@ -52,14 +55,16 @@ export function Rewind({ client, session, actions, live, onJob, onClose }: Props
     }
   };
 
-  // Always start with the plan: nothing changes until someone has seen it. Once per session, even
-  // when React runs effects twice in development.
+  // Always start with the plan: nothing changes until someone has seen it. Once per session and
+  // starting point, even when React runs effects twice in development.
   const planned = useRef<string | null>(null);
   useEffect(() => {
-    if (planned.current === session.id) return;
-    planned.current = session.id;
+    const key = `${session.id}|${since ?? ""}`;
+    if (planned.current === key) return;
+    planned.current = key;
+    setPlan(null);
     void request(true);
-  }, [session.id]);
+  }, [session.id, since]);
 
   // The live copy of the run (from events) wins over the response we got back.
   const run = runId && live?.id === runId && !live.dry_run ? live : null;
@@ -84,7 +89,7 @@ export function Rewind({ client, session, actions, live, onJob, onClose }: Props
         </p>
       )}
       {!run && !plan && !error && <p className="quiet loading">Drawing up the plan…</p>}
-      {!run && plan && <Plan job={plan} actions={actions} busy={busy} onRun={() => request(false)} onClose={onClose} />}
+      {!run && plan && <Plan job={plan} actions={actions} from={from} busy={busy} onRun={() => request(false)} onClose={onClose} />}
       {run && run.status === "running" && <Running job={run} actions={actions} />}
       {run && run.status !== "running" && <Proof job={run} actions={actions} session={session} onClose={onClose} />}
     </div>
@@ -93,8 +98,15 @@ export function Rewind({ client, session, actions, live, onJob, onClose }: Props
 
 // --- The plan --------------------------------------------------------------------------------
 
-function Plan(props: { job: RewindJob; actions: Record<string, Action>; busy: boolean; onRun: () => void; onClose: () => void }) {
-  const { job, actions, busy, onRun, onClose } = props;
+function Plan(props: {
+  job: RewindJob;
+  actions: Record<string, Action>;
+  from?: Action;
+  busy: boolean;
+  onRun: () => void;
+  onClose: () => void;
+}) {
+  const { job, actions, from, busy, onRun, onClose } = props;
   const counts = planCounts(job, actions);
   const held = job.steps.filter((s) => stepKind(s, actions[s.action_id]) === "held");
   const bySystem = SYSTEM_ORDER.map((system) => ({
@@ -104,7 +116,14 @@ function Plan(props: { job: RewindJob; actions: Record<string, Action>; busy: bo
 
   return (
     <section className="plan" aria-labelledby="plan-title">
-      <p className="meta">dry run · plan {shortId(job.id)} · {job.steps.length} steps, newest first</p>
+      <p className="meta">
+        dry run · plan {shortId(job.id)} · {job.steps.length} steps, newest first
+        {from && (
+          <span className="back-to">
+            · back to {from.tool} at {new Date(from.created_at).toLocaleTimeString([], { hour12: false })}
+          </span>
+        )}
+      </p>
       <div className="title-row">
         <h1 id="plan-title" className="headline">
           Here’s the do-over.

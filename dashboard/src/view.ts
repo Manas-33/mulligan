@@ -141,3 +141,10 @@ export function fieldLabel(field: string): string {
 }
 
 export const shortId = (id: string) => id.replace(/^[a-z]+_/, "").slice(-4).toLowerCase();
+
+/** Statuses a rewind can still do something about (undo it, or refuse it while held). */
+export const UNDOABLE = new Set<Action["status"]>(["executed", "held", "approved", "conflict"]);
+
+/** Undoable actions created at or after `since`: what "Rewind to here" would take back. */
+export const undoableFrom = (actions: Action[], since: string): Action[] =>
+  actions.filter((a) => UNDOABLE.has(a.status) && Date.parse(a.created_at) >= Date.parse(since));

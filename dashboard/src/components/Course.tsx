@@ -4,13 +4,15 @@
 import { useState } from "react";
 import { SENTRY_TRACE_URL } from "../config.ts";
 import type { Action, Session, System } from "../types.ts";
-import { laneCaption, position, shortId, SYSTEM_ORDER, systemName } from "../view.ts";
+import { laneCaption, position, shortId, SYSTEM_ORDER, systemName, undoableFrom } from "../view.ts";
 import { DitherField } from "./Dither.tsx";
-import { Flag, SystemObject } from "./SystemObject.tsx";
+import { Flag, RewindGlyph, SystemObject } from "./SystemObject.tsx";
 
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-export function Course({ session, actions }: { session: Session; actions: Action[] }) {
+type CourseProps = { session: Session; actions: Action[]; onRewindTo: (action: Action) => void };
+
+export function Course({ session, actions, onRewindTo }: CourseProps) {
   const [picked, setPicked] = useState<string | null>(null);
   const start = session.started_at;
   const end = session.ended_at ?? actions[0]?.created_at ?? start;
@@ -50,7 +52,9 @@ export function Course({ session, actions }: { session: Session; actions: Action
         )}
         </div>
       )}
-      {selected && <Selected action={selected} />}
+      {selected && (
+        <Selected action={selected} undoes={undoableFrom(actions, selected.created_at).length} onRewindTo={() => onRewindTo(selected)} />
+      )}
     </section>
   );
 }
@@ -88,7 +92,7 @@ function Lane(props: { system: System; actions: Action[]; start: string; end: st
   );
 }
 
-function Selected({ action }: { action: Action }) {
+function Selected({ action, undoes, onRewindTo }: { action: Action; undoes: number; onRewindTo: () => void }) {
   const time = new Date(action.created_at).toLocaleTimeString([], { hour12: false });
   const why = action.explanation ?? action.reversibility.reason;
   return (
@@ -110,6 +114,14 @@ function Selected({ action }: { action: Action }) {
           <PaymentHold releaseAt={action.hold.release_at} />
         )}
         {action.error && <p className="error">{action.error}</p>}
+      </div>
+      <div className="rewind-to">
+        <button className="pill-button small" disabled={undoes === 0} onClick={onRewindTo}>
+          <RewindGlyph size={16} /> Rewind to here
+        </button>
+        <span className="quiet small">
+          {undoes === 0 ? "Nothing to undo from here." : undoes === 1 ? "Undoes just this one." : `Undoes this and the ${undoes - 1} after it.`}
+        </span>
       </div>
     </div>
   );
