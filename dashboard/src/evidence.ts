@@ -21,9 +21,9 @@ export const EVIDENCE = {
         caption: "MULLIGAN-GATEWAY-5. The frame’s local variables show the comment arriving as the setting’s value.",
       },
       {
-        src: "/evidence/sentry-action-spans.png",
+        src: "/evidence/sentry-action-spans.jpg",
         alt: "Sentry Explore: mulligan.action spans for Postgres, GitHub and Notion tools in one demo run",
-        caption: "One demo run: a span per agent action, across Postgres, GitHub and Notion.",
+        caption: "One demo run in Explore → Traces: a span per agent action (Notion, GitHub, Postgres), with how long each took.",
       },
     ] satisfies Shot[],
   },
