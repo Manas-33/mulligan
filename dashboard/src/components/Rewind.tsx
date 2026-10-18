@@ -2,19 +2,22 @@
 // (objects fly back to the tee as rewind.step events land), and the proof (checksums per system).
 
 import { useEffect, useRef, useState } from "react";
-import { ApiError, type Client } from "../api/client.ts";
+import type { Client } from "../api/client.ts";
 import type { Action, FieldChange, RewindJob, RewindStep, Session, System } from "../types.ts";
 import {
+  describeProblem,
   fieldLabel,
   groupHash,
   planCounts,
   planSentence,
+  type Problem,
   rewindSummary,
   shortId,
   showValue,
   stepKind,
   SYSTEM_ORDER,
   systemName,
+  unfinishedSteps,
 } from "../view.ts";
 import { DitherField } from "./Dither.tsx";
 import { RewindGlyph, SystemObject } from "./SystemObject.tsx";
@@ -36,7 +39,7 @@ export function Rewind({ client, session, actions, live, from, onJob, onClose }:
   const [plan, setPlan] = useState<RewindJob | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ dryRun: boolean; problem: Problem } | null>(null);
   const top = useRef<HTMLDivElement>(null);
 
   const request = async (dryRun: boolean) => {
@@ -49,7 +52,7 @@ export function Rewind({ client, session, actions, live, from, onJob, onClose }:
       else setRunId(job.id);
       top.current?.scrollIntoView({ block: "start" });
     } catch (e) {
-      setError(e instanceof ApiError ? String(e.detail) : String(e));
+      setError({ dryRun, problem: describeProblem(e) });
     } finally {
       setBusy(false);
     }
@@ -83,16 +86,55 @@ export function Rewind({ client, session, actions, live, from, onJob, onClose }:
       <button className="link-button back" onClick={onClose}>
         ← Back to the round
       </button>
-      {error && (
-        <p className="error banner" role="alert">
-          {error}
+      {error && !error.dryRun && (
+        <p className="notice notice-bad" role="alert">
+          The rewind didn’t start: {problemText(error.problem)}{" "}
+          {error.problem.status ? "Nothing changed." : "If it did reach the gateway, its progress shows up here once the feed is back."}
         </p>
       )}
       {!run && !plan && !error && <p className="quiet loading">Drawing up the plan…</p>}
+      {!run && !plan && error?.dryRun && <PlanFailed problem={error.problem} busy={busy} onRetry={() => request(true)} />}
       {!run && plan && <Plan job={plan} actions={actions} from={from} busy={busy} onRun={() => request(false)} onClose={onClose} />}
       {run && run.status === "running" && <Running job={run} actions={actions} />}
-      {run && run.status !== "running" && <Proof job={run} actions={actions} session={session} onClose={onClose} />}
+      {run && run.status !== "running" && (
+        <Proof
+          job={run}
+          actions={actions}
+          session={session}
+          onClose={onClose}
+          onRetry={() => {
+            setRunId(null);
+            setPlan(null);
+            void request(true);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** One sentence for a failed request, for the notice above the plan. */
+function problemText(p: Problem): string {
+  if (p.kind === "unreachable") return "the gateway didn’t answer.";
+  if (p.kind === "unauthorized") return "the gateway refused the dashboard’s token.";
+  if (p.status === 409) return "another rewind is still running. Try again once it finishes.";
+  return `${p.detail.replace(/\.?$/, ".")}`;
+}
+
+function PlanFailed({ problem, busy, onRetry }: { problem: Problem; busy: boolean; onRetry: () => void }) {
+  return (
+    <section className="plan" aria-labelledby="plan-title" role="alert">
+      <p className="meta">dry run · {problem.status ? `HTTP ${problem.status}` : "no answer"}</p>
+      <h1 id="plan-title" className="headline">
+        Couldn’t draw up the plan.
+      </h1>
+      <p className="lede">The dry run didn’t come back: {problemText(problem)} Nothing has changed, and nothing will until you see a plan.</p>
+      <div className="hero-actions">
+        <button className="pill-button small" disabled={busy} onClick={onRetry}>
+          {busy ? "Asking…" : "Try again"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -326,14 +368,16 @@ function Printout({ steps, actions }: { steps: RewindStep[]; actions: Record<str
 
 // --- The proof -------------------------------------------------------------------------------
 
-function Proof(props: { job: RewindJob; actions: Record<string, Action>; session: Session; onClose: () => void }) {
-  const { job, actions, session, onClose } = props;
+function Proof(props: { job: RewindJob; actions: Record<string, Action>; session: Session; onClose: () => void; onRetry: () => void }) {
+  const { job, actions, session, onClose, onRetry } = props;
+  const unfinished = unfinishedSteps(job);
   const checks = Object.entries(job.verification) as [System, RewindJob["verification"][string]][];
   const ok = checks.filter(([, v]) => v.ok === true).length;
   const allOk = checks.length > 0 && ok === checks.length;
   const kept = job.steps.some((s) => s.kept_fields.length > 0);
   const systems = SYSTEM_ORDER.filter((s) => job.steps.some((x) => x.system === s) || job.verification[s]);
-  const title = job.status === "failed" ? "The rewind stopped." : allOk ? "Back on the tee." : "Mostly back.";
+  const clean = job.status === "completed" && unfinished.length === 0;
+  const title = job.status === "failed" ? "The rewind stopped." : clean && allOk ? "Back on the tee." : "Mostly back.";
 
   return (
     <section className="proof" aria-labelledby="proof-title">
@@ -352,7 +396,9 @@ function Proof(props: { job: RewindJob; actions: Record<string, Action>; session
       </div>
       <p className="lede center">
         {job.error ??
-          "Every system was hashed again and compared with how it looked before the agent, with any kept human edits on top."}
+          (unfinished.length
+            ? `${unfinished.length} ${unfinished.length === 1 ? "change didn’t" : "changes didn’t"} come back. Everything else was put back and hashed again.`
+            : "Every system was hashed again and compared with how it looked before the agent, with any kept human edits on top.")}
       </p>
       <div className="lined-up" aria-hidden>
         {systems.map((s, i) => (
@@ -386,6 +432,7 @@ function Proof(props: { job: RewindJob; actions: Record<string, Action>; session
               mismatch.
             </p>
           )}
+          {unfinished.length > 0 && <Unfinished steps={unfinished} actions={actions} stopped={job.status === "failed"} onRetry={onRetry} />}
         </div>
         <aside className="summary">
           <header className="section-head ruled">
@@ -398,6 +445,39 @@ function Proof(props: { job: RewindJob; actions: Record<string, Action>; session
         </aside>
       </div>
     </section>
+  );
+}
+
+/** The steps a partial or failed run left behind, with why, and a way to try just those again. */
+function Unfinished({ steps, actions, stopped, onRetry }: { steps: RewindStep[]; actions: Record<string, Action>; stopped: boolean; onRetry: () => void }) {
+  return (
+    <div className="unfinished">
+      <header className="section-head ruled">
+        <h2>Still out on the course</h2>
+        <span className="berry">{steps.length} left</span>
+      </header>
+      <ol>
+        {steps.map((s) => (
+          <li key={s.action_id} className="print-row result-failed">
+            <span className="mono quiet">#{shortId(s.action_id)}</span>
+            <span className="print-what">
+              <SystemObject system={s.system} size={26} /> {systemName(s.system)} · {actions[s.action_id]?.summary ?? s.tool}
+              {/* A step never reached still carries the plan's detail, which says what would have happened. */}
+              {s.result === "failed" && s.detail && <span className="quiet small unfinished-why">{s.detail}</span>}
+            </span>
+            <span className="print-result small">{s.result === "pending" ? "never reached" : "failed"}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="unfinished-actions">
+        <button className="pill-button small" onClick={onRetry}>
+          <RewindGlyph size={16} /> Plan the rest again
+        </button>
+        <span className="quiet small">
+          {stopped ? "The run stopped early." : "The rest of the run finished."} A new dry run only lists what’s still undoable.
+        </span>
+      </div>
+    </div>
   );
 }
 

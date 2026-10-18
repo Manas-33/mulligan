@@ -13,6 +13,8 @@ import {
   stepKind,
   timeLeft,
   undoableFrom,
+  unfinishedSteps,
+  describeProblem,
 } from "../src/view.ts";
 
 const step = (over: Partial<RewindStep>): RewindStep => ({
@@ -37,7 +39,7 @@ const action = (over: Partial<Action>) =>
   }) as Action;
 
 const job = (steps: RewindStep[], verification: RewindJob["verification"] = {}) =>
-  ({ id: "rwd_1", steps, verification }) as unknown as RewindJob;
+  ({ id: "rwd_1", status: "completed", steps, verification }) as unknown as RewindJob;
 
 describe("stepKind", () => {
   it("files held and skipped actions as held", () => {
@@ -125,5 +127,30 @@ describe("undoableFrom", () => {
     ];
     expect(undoableFrom(list, "2026-10-17T23:04:14Z").map((a) => a.id)).toEqual(["a4", "a2"]);
     expect(undoableFrom(list, "2026-10-17T23:05:00Z")).toEqual([]);
+  });
+});
+
+describe("failed and partial rewinds", () => {
+  it("lists failed steps, and on a stopped run the ones never reached", () => {
+    const partial = { ...job([step({ action_id: "a", result: "failed" }), step({ action_id: "b", result: "restored" })], {}), status: "partial" as const };
+    expect(unfinishedSteps(partial).map((s) => s.action_id)).toEqual(["a"]);
+    const stopped = { ...job([step({ action_id: "a", result: "failed" }), step({ action_id: "b", result: "pending" })], {}), status: "failed" as const };
+    expect(unfinishedSteps(stopped).map((s) => s.action_id)).toEqual(["a", "b"]);
+  });
+
+  it("doesn't count what didn't come back as undone", () => {
+    const j = { ...job([step({ action_id: "a", result: "failed" }), step({ action_id: "b", result: "restored" })], {}), status: "partial" as const };
+    expect(rewindSummary(j, { a: action({ id: "a" }), b: action({ id: "b" }) }, "round 7f3a")).toBe(
+      "Rewound round 7f3a. 1 change undone. 1 change didn't come back.",
+    );
+  });
+});
+
+describe("describeProblem", () => {
+  it("sorts failures into unauthorized, gateway and unreachable", () => {
+    expect(describeProblem({ status: 401, detail: "missing or invalid token" })).toEqual({ kind: "unauthorized", status: 401, detail: "missing or invalid token" });
+    expect(describeProblem({ status: 422, detail: [{ msg: "scope needs at least one field" }] }).detail).toBe("scope needs at least one field");
+    expect(describeProblem({ status: 500, detail: null }).kind).toBe("gateway");
+    expect(describeProblem(new TypeError("Failed to fetch"))).toEqual({ kind: "unreachable", detail: "Failed to fetch" });
   });
 });

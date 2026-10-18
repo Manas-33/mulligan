@@ -53,7 +53,13 @@ s { text-decoration-thickness: 1.5px; }
 .center { text-align: center; justify-content: center; }
 .right { margin-left: auto; text-align: right; }
 .error { color: var(--berry-text); }
-.banner { margin: 8px 24px 0; padding: 10px 14px; border: 1px solid rgba(255, 92, 108, 0.4); border-radius: 10px; }
+code.mono { font-size: 0.9em; color: var(--cream); }
+/* A line of news under the nav: a dot and a sentence on a dashed rule, not a box. */
+.notice { display: flex; align-items: baseline; gap: 10px; margin: 0 24px 8px; padding: 10px 0; border-top: 1px dashed rgba(255, 201, 74, 0.45); color: var(--sun); font-size: 15px; }
+.notice::before { content: ""; flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: currentColor; translate: 0 -1px; animation: blink 1s steps(2) infinite; }
+.notice-bad { color: var(--berry-text); border-top-color: rgba(255, 92, 108, 0.45); }
+.notice-bad::before { animation: none; }
+.rewind .notice { margin: 0 0 18px; }
 .empty { padding: 28px 0; }
 .loading { padding: 64px 24px; font-size: 18px; }
 
@@ -73,7 +79,7 @@ s { text-decoration-thickness: 1.5px; }
 .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sun); }
 .conn-live .dot { background: var(--mint); }
 .conn-reconnecting .dot { animation: blink 1s steps(2) infinite; }
-.conn-error .dot { background: var(--berry); }
+.conn-unauthorized .dot { background: var(--berry); }
 
 /* --- Shared type --- */
 .meta { font: 13px var(--mono); color: var(--quiet); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -103,7 +109,7 @@ s { text-decoration-thickness: 1.5px; }
 .pill-button {
   display: inline-flex; align-items: center; gap: 12px; cursor: pointer;
   padding: 16px 28px 14px; border: 0; border-bottom: 5px solid var(--cream-edge); border-radius: 999px;
-  background: var(--cream); color: var(--ground); font-weight: 700; font-size: 19px;
+  background: var(--cream); color: var(--ground); font-weight: 700; font-size: 19px; white-space: nowrap;
   transition: transform 120ms ease, border-bottom-width 120ms ease;
 }
 .pill-button:hover:not(:disabled) { transform: translateY(-1px); }
@@ -118,9 +124,20 @@ s { text-decoration-thickness: 1.5px; }
 .hero { display: grid; grid-template-columns: minmax(0, 700px) minmax(0, 1fr); align-items: center; gap: 24px; padding: 64px 24px 56px; }
 .hero-text { display: flex; flex-direction: column; gap: 24px; }
 .hero-actions { display: flex; align-items: center; gap: 22px; padding-top: 6px; }
-.pile { position: relative; height: 380px; }
+.pile { --pile-scale: 1; position: relative; height: 380px; }
 .pile-item { position: absolute; display: flex; flex-direction: column; align-items: center; animation: float 6s ease-in-out infinite alternate; }
 .pile-item .sticker-small { position: absolute; top: -6px; left: 50%; transform: translateX(-30%) rotate(-5deg); }
+
+/* --- Whole-screen states (loading, no rounds, gateway problems, crash) --- */
+.state { min-height: 520px; }
+.state .lede code { white-space: nowrap; }
+.tee-up, .lost-flag { position: relative; height: 300px; display: flex; align-items: flex-end; justify-content: center; gap: 18px; padding-bottom: 40px; }
+.tee-up-item { opacity: 0.55; animation: float 6s ease-in-out infinite alternate; }
+.tee-up-item:nth-child(odd) { rotate: -4deg; }
+.tee-up-item:nth-child(even) { rotate: 5deg; }
+.tee-up-line { position: absolute; left: 12%; right: 12%; bottom: 36px; height: 2px; background: rgba(243, 234, 211, 0.25); }
+/* The flag knocked over on the green: something went wrong, nothing is on fire. */
+.knocked { rotate: 74deg; translate: 0 -8px; transform-origin: 20% 95%; }
 
 /* --- Body --- */
 .body { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 56px; align-items: start; padding: 0 24px; }
@@ -249,6 +266,12 @@ s { text-decoration-thickness: 1.5px; }
 .bubble { padding: 14px 18px; background: #26261f; border-radius: 22px 22px 22px 6px; font-size: 16px; line-height: 1.45; }
 .summary .pill-button { align-self: flex-start; }
 
+.unfinished { margin-top: 32px; }
+.unfinished .print-what { row-gap: 2px; }
+.unfinished-why { flex-basis: 100%; padding-left: 36px; }
+.unfinished .print-result { color: var(--berry-text); }
+.unfinished-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-top: 18px; }
+
 /* --- Objects and motion --- */
 .object { display: block; overflow: visible; }
 .hop { animation: hop 620ms var(--bounce) both; }
@@ -275,11 +298,12 @@ s { text-decoration-thickness: 1.5px; }
 /* --- Narrow screens --- */
 @media (max-width: 1100px) {
   .app { padding: 0 24px 64px; }
-  .hero, .body, .running-hero, .proof-body { grid-template-columns: 1fr; }
+  .hero, .body, .running-hero, .proof-body { grid-template-columns: minmax(0, 1fr); }
   .pile { height: 300px; }
   .row { grid-template-columns: 1fr; gap: 6px; }
   .plan-section { flex-direction: column; }
   .flight { justify-self: start; }
+  .counter-row { flex-wrap: wrap; }
   .nav { height: auto; min-height: 80px; flex-wrap: wrap; padding: 16px 0; }
   .round-picker { min-width: 0; }
   .round-picker select { min-width: 0; max-width: 260px; text-overflow: ellipsis; }
@@ -289,21 +313,59 @@ s { text-decoration-thickness: 1.5px; }
   .nav { height: auto; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
   .round-picker { margin-left: 0; min-width: 0; }
   .round-picker select { max-width: 200px; text-overflow: ellipsis; }
-  .pile { overflow: hidden; height: 240px; }
+  .pile { --pile-scale: 0.62; height: 230px; margin-right: 24px; }
+  .tee-up, .lost-flag { height: 200px; gap: 8px; }
+  .tee-up .object { width: 56px; height: auto; }
+  .lost-flag svg { width: 96px; height: auto; }
+  .hero-actions { flex-wrap: wrap; gap: 14px 22px; }
+  .state { min-height: 0; }
   .body { gap: 40px; }
   .hold .object { width: 56px; height: auto; }
   .hold-actions { flex-wrap: wrap; }
   .hero, .body, .rewind { padding-left: 0; padding-right: 0; }
   .lane-name { width: 120px; }
-  .check { grid-template-columns: 40px 1fr; }
+  .lined-up { gap: 14px; padding: 20px 0 36px; }
+  .lined-up .object { width: 64px; height: auto; }
+  .lined-up::after { left: 10%; right: 10%; bottom: 32px; }
+  .check { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 4px 12px; padding: 14px 0; min-height: 0; }
+  .check > .object { width: 32px; height: auto; }
+  .check .verdict { grid-row: 1; grid-column: 3; }
+  .check .hashes { grid-row: 2; grid-column: 2 / -1; font-size: 14px; }
+  .section-head { flex-wrap: wrap; row-gap: 2px; }
+  .section-head h2 { font-size: 22px; }
   .plan-footer { flex-wrap: wrap; }
+}
+
+/* The flight scene is drawn in 664 x 380 px (the arc and the offset-path share those
+   coordinates), so on narrow screens it scales as a whole instead of squashing. */
+@media (max-width: 760px) {
+  .flight { --fs: 0.75; width: 664px; max-width: none; transform: scale(var(--fs)); transform-origin: 0 0;
+    margin-right: calc(664px * (var(--fs) - 1)); margin-bottom: calc(400px * (var(--fs) - 1)); }
+}
+@media (max-width: 640px) {
+  .flight { --fs: 0.5; }
+  .flight .tee-label { font-size: 26px; bottom: -8px; }
 }
 
 /* "Rewind to here" on the selected action */
 .selected-body { flex: 1; }
 .rewind-to { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; text-align: right; }
 @media (max-width: 640px) {
-  .selected { flex-wrap: wrap; }
+  .selected { flex-wrap: wrap; align-items: flex-start; gap: 14px; padding: 16px; }
+  .selected > .object { width: 34px; height: auto; }
+  .selected-body { flex-basis: calc(100% - 48px); }
+  .selected h3 { font-size: 19px; }
+  .headline { font-size: 38px; }
+  .print-row { grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; }
+  .proof .headline { font-size: 44px; }
+  .lede { font-size: 17px; }
+  .plan-section { gap: 14px; padding: 18px 0 20px; }
+  .plan-side { flex-direction: row; align-items: center; flex-wrap: wrap; width: auto; gap: 4px 12px; }
+  .plan-side .object { width: 40px; height: auto; }
+  .plan-footer .right { margin-left: 0; text-align: left; }
+  .hold { flex-direction: column; gap: 10px; padding: 22px 0; }
+  .hold .object { width: 48px; }
+  .hold h3 { font-size: 21px; }
   .rewind-to { align-items: flex-start; text-align: left; width: 100%; }
 }
 .back-to { color: var(--sun); }

@@ -7,11 +7,7 @@ if (SENTRY_DSN) {
     dsn: SENTRY_DSN,
     environment: SENTRY_ENVIRONMENT,
     release: "mulligan-dashboard@0.1.0",
-    integrations: [
-      Sentry.browserTracingIntegration(),
-      // Replay masks all text and blocks media by default: the dashboard shows customer data.
-      Sentry.replayIntegration(),
-    ],
+    integrations: [Sentry.browserTracingIntegration()],
     tracesSampleRate: 1.0,
     // Link dashboard requests to the gateway's traces.
     tracePropagationTargets: [API_URL],
@@ -19,4 +15,6 @@ if (SENTRY_DSN) {
     replaysSessionSampleRate: 1.0,
     replaysOnErrorSampleRate: 1.0,
   });
+  // Replay is the biggest part of the SDK, so it loads in its own chunk right after the page.
+  void import("./replay.ts").then(({ replay }) => Sentry.addIntegration(replay()));
 }
