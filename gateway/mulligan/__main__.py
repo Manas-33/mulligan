@@ -10,6 +10,7 @@ import logging
 import sentry_sdk
 import uvicorn
 
+from mulligan.adapters.github.adapter import GitHubAdapter
 from mulligan.adapters.postgres.adapter import PostgresAdapter
 from mulligan.app import create_app
 from mulligan.interfaces import Adapter
@@ -23,6 +24,9 @@ log = logging.getLogger("mulligan")
 
 async def serve(settings: Settings) -> None:
     adapters: list[Adapter] = []
+    github = await GitHubAdapter.open(settings) if settings.github_token else None
+    if github:
+        adapters.append(github)
     postgres = await PostgresAdapter.open(settings) if settings.prod_db_url else None
     if postgres:
         adapters.append(postgres)
@@ -38,6 +42,8 @@ async def serve(settings: Settings) -> None:
     services.start_background()
     rest = create_app(settings, services=services)
     mcp = create_mcp_app(settings, services.gateway)
+    if github and settings.demo:
+        services.demo_resets.append(github.reset)
     servers = [
         uvicorn.Server(uvicorn.Config(rest, host=settings.bind_host, port=settings.api_port)),
         uvicorn.Server(uvicorn.Config(mcp, host=settings.bind_host, port=settings.mcp_port)),
@@ -55,6 +61,8 @@ async def serve(settings: Settings) -> None:
         await services.close()
         if postgres:
             await postgres.close()
+        if github:
+            await github.close()
 
 
 def main() -> None:

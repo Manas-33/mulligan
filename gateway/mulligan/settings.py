@@ -93,6 +93,10 @@ class Settings:
     policy_path: Path = REPO_ROOT / "contracts" / "reversibility_policy.yaml"
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
+    github_token: str = ""
+    github_org: str = ""
+    github_repo: str = ""
+    github_write_interval_ms: int = 1000
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -127,4 +131,8 @@ class Settings:
             policy_path=Path(get("MULLIGAN_POLICY_PATH", str(cls.policy_path))),
             sentry_dsn=get("SENTRY_DSN_GATEWAY"),
             sentry_environment=get("SENTRY_ENVIRONMENT", "dev"),
+            github_token=get("GITHUB_TOKEN"),
+            github_org=get("GITHUB_ORG"),
+            github_repo=get("GITHUB_REPO"),
+            github_write_interval_ms=int(get("GITHUB_WRITE_INTERVAL_MS", "1000")),
         )
