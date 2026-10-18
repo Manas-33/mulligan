@@ -239,6 +239,27 @@ async def test_held_call_runs_only_after_approval(svc: Services) -> None:
     assert await svc.store.take_held_call(action.id) is None  # arguments are gone once run
 
 
+async def test_an_approved_call_a_rewind_rejected_never_runs(svc: Services) -> None:
+    entry = svc.gateway.policy.entry("pg_update_rows")
+    assert entry is not None
+    svc.gateway.policy._entries["pg_update_rows"] = entry.model_copy(
+        update={"hold": "email_outbox"}
+    )
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 2}]
+    result = await svc.gateway.call_tool(
+        session, "pg_update_rows", {"filter": flt, "values": {"price": 1}}
+    )
+    action = await svc.store.get(result.structured_content["action_id"])
+    assert action is not None
+    # Approved, then a rewind's cancel rejects it before the approval's run gets to it.
+    await svc.store.save(action.model_copy(update={"status": ActionStatus.approved}))
+    await svc.store.save(action.model_copy(update={"status": ActionStatus.rejected}))
+    ran = await svc.gateway.run_held(action.id)
+    assert ran.status is ActionStatus.rejected
+    assert fake(svc).rows[2]["price"] == 99
+
+
 async def test_events_are_ordered_and_replayable(svc: Services) -> None:
     received: list[str] = []
 

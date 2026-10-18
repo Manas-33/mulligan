@@ -238,10 +238,15 @@ class Gateway:
         action = await self.store.get(action_id)
         if action is None:
             raise LookupError(action_id)
+        session = await self.store.get_session(action.session_id)
         args = await self.store.take_held_call(action_id)
+        # A rewind may have rejected it (and dropped its arguments) since it was approved.
+        latest = await self.store.get(action_id) or action
+        if latest.status is not ActionStatus.approved:
+            return latest
         if args is None:
             raise LookupError(f"no stored arguments for {action_id}")
-        session = await self.store.get_session(action.session_id)
+        action = latest
         call = ToolCall(
             action_id=action.id,
             session_id=action.session_id,
