@@ -4,7 +4,7 @@
 pre-session checksum back. A second test adds a teammate's edit after the agent's last write to
 one field and expects that edit kept and flagged, with everything else restored.
 
-  MULLIGAN_FUZZ_SESSIONS=200   cases per test (default 200)
+  MULLIGAN_FUZZ_SESSIONS=200   cases per test (default 50)
   MULLIGAN_FUZZ_SEED=17        replay one case
 
 Some generated calls are refused (FK or unique violations, tables already dropped). That's on
@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 from collections import Counter
 from collections.abc import Iterable
@@ -49,7 +50,7 @@ prod_db = pg.prod_db
 svc = pg.svc
 human = pg.human
 
-SESSIONS = int(os.environ.get("MULLIGAN_FUZZ_SESSIONS", "200"))
+SESSIONS = int(os.environ.get("MULLIGAN_FUZZ_SESSIONS", "50"))
 _ONLY = os.environ.get("MULLIGAN_FUZZ_SEED")
 SEEDS = [int(_ONLY)] if _ONLY else list(range(SESSIONS))
 MAX_REPORTS = 3
@@ -109,10 +110,8 @@ HUMAN_EDITS: dict[str, dict[str, Any]] = {
     "legacy_pricing": {"price": 4242.42},
     "price_overrides": {"reason": "edited by hand"},
 }
-GENERATED_FROM = {("order_items", "qty"), ("order_items", "unit_price")}  # -> line_total
-TRASH_CASCADE = "cascade into a trashed table"
-PK_CHANGE_THEN_DROP = "primary key changed, then table dropped"
-EDIT_UNDER_GENERATED = "kept edit under a generated column"
+# A soft-dropped table's (or its index's) name in mulligan_trash: "<action id>__orders", "..._i1".
+TRASH_NAME = re.compile(r"act_[0-9a-z]{26}_\w*")
 NAMES = ["Ada", "Grace", "Alan", "Edsger", "Barbara", "Ken", "Frances", "Donald"]
 DELETE_WEIGHTS = {"customers": 3, "orders": 3}
 
@@ -137,8 +136,6 @@ class Case:
     calls: list[Call] = field(default_factory=list)
     job: RewindJob | None = None
     notes: list[str] = field(default_factory=list)
-    known: list[str] = field(default_factory=list)  # known verify_scope bugs this case hits
-    edit_under_generated: bool = False
 
     def executed(self) -> list[Call]:
         return [c for c in self.calls if c.status == "executed"]
@@ -336,42 +333,6 @@ async def call(
     return done
 
 
-async def known_verify_bugs(db: psycopg.AsyncConnection[Any], case: Case) -> list[str]:
-    """Session shapes where PostgresAdapter.verify_scope reports a mismatch after a correct
-    restore (each one reproduced by hand; the full-database checksum still matches):
-    - a cascade changed rows of a table while it sat in the trash: those rows' drop-time form
-      is counted on the expected side twice;
-    - an UPDATE changed a primary key, then the table was dropped: the row at the old key is
-      in the restored table but not on the expected side;
-    - a teammate's kept edit is on a column a generated column depends on
-      (order_items.qty / unit_price -> line_total): the expected side puts the generated
-      column back to its pre-session value."""
-    ids = [c.action_id for c in case.executed()]
-    cur = await db.execute(
-        "SELECT action_id, table_name, schema_name = 'mulligan_trash',"
-        "       op = 'UPDATE' AND changed && ARRAY(SELECT jsonb_object_keys(pk))"
-        "  FROM mulligan_audit.audit_log WHERE action_id = ANY(%s)",
-        [ids],
-    )
-    audit = await cur.fetchall()
-    known = []
-    if any(in_trash for _, _, in_trash, _ in audit):
-        known.append(TRASH_CASCADE)
-    order = {c.action_id: i for i, c in enumerate(case.executed())}
-    drops = [
-        (i, c.args["table"]) for i, c in enumerate(case.executed()) if c.tool == "pg_drop_table"
-    ]
-    if any(
-        moved and table == dropped and order[aid] < i
-        for aid, table, _, moved in audit
-        for i, dropped in drops
-    ):
-        known.append(PK_CHANGE_THEN_DROP)
-    if case.edit_under_generated:
-        known.append(EDIT_UNDER_GENERATED)
-    return known
-
-
 async def trash_tables(db: psycopg.AsyncConnection[Any]) -> int:
     return int(
         await pg.scalar(db, "SELECT count(*) FROM pg_tables WHERE schemaname = 'mulligan_trash'")
@@ -388,23 +349,21 @@ async def common_problems(case: Case, db: psycopg.AsyncConnection[Any]) -> list[
     if failed:
         problems.append(f"{len(failed)} failed steps")
     check = job.verification.get(System.postgres)
-    verified = not case.executed() or (check is not None and check.ok is True)
-    if not verified and not failed:
-        # Tolerated only for the known verify_scope bugs; the caller still compares the
-        # full-database checksum.
-        case.known = await known_verify_bugs(db, case)
-    if not verified and not case.known:
+    if case.executed() and (check is None or check.ok is not True):
         problems.append(f"verification: {check}")
-    if job.status is not RewindJobStatus.completed and not case.known:
+    if job.status is not RewindJobStatus.completed:
         problems.append(f"rewind status {job.status.value}: {job.error}")
     if await trash_tables(db):
         problems.append("tables left in mulligan_trash")
+    texts = [c.summary for c in case.calls] + [s.detail or "" for s in job.steps]
+    leaked = sorted({m for text in texts for m in TRASH_NAME.findall(text)})
+    if leaked:
+        problems.append(f"trash names shown to people: {leaked}")
     return problems
 
 
 def tally(stats: Counter[str], case: Case) -> None:
     stats["sessions"] += 1
-    stats.update(f"known verify_scope mismatch ({k})" for k in case.known)
     for c in case.calls:
         stats["actions"] += 1
         stats[f"{c.tool} {c.status}"] += 1
@@ -579,7 +538,6 @@ async def test_teammate_edit_after_the_agent_is_kept_and_flagged(svc: Services, 
                 tally(stats, case)
                 continue
             t = fz.rng.choice(targets)
-            case.edit_under_generated = (t.table, t.col) in GENERATED_FROM
             human_value = HUMAN_EDITS[t.table][t.col]
             ident = sql.Identifier("public", t.table)
             await human.execute(

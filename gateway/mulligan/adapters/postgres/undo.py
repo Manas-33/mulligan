@@ -116,6 +116,12 @@ async def undrop(conn: AsyncConnection[Any], p: dict[str, Any]) -> None:
     row: Any = await cur.fetchone()
     if row is None or (row["nspname"], row["relname"]) != (p["trash_schema"], p["trash_name"]):
         raise UndoError(f"trashed table {p['trash_name']} is gone or was moved")
+    if "comment" in p:
+        await conn.execute(
+            sql.SQL("COMMENT ON TABLE {} IS {}").format(
+                sql.Identifier(p["trash_schema"], p["trash_name"]), sql.Literal(p["comment"])
+            )
+        )
     for r in p["renamed"]:
         await conn.execute(
             sql.SQL("ALTER {} {} RENAME TO {}").format(

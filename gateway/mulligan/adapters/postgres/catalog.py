@@ -12,6 +12,7 @@ TRASH_SCHEMA = "mulligan_trash"
 AUDIT_TRIGGER = "mulligan_audit_row"
 HIDDEN_SCHEMAS = frozenset({TRASH_SCHEMA, "mulligan_audit", "pg_catalog", "information_schema"})
 MAX_IDENT_BYTES = 63  # NAMEDATALEN - 1
+TRASH_NOTE = "mulligan_trashed"  # key of the JSON comment on a trashed table
 
 
 class ToolError(Exception):
@@ -164,6 +165,36 @@ async def unaudited_tables(conn: AsyncConnection[Any], t: Table, op: str) -> lis
     ).format(reach)
     cur = await conn.execute(query, [t.oid, AUDIT_TRIGGER])
     return [r["t"] for r in await cur.fetchall()]
+
+
+async def trash_aliases(conn: AsyncConnection[Any]) -> dict[str, str]:
+    """Name in the trash -> name before the drop, for every trashed table and its renamed
+    indexes and sequences. Read from the comment soft_drop puts on the trashed table."""
+    cur = await conn.execute(
+        """
+        SELECT c.relname, obj_description(c.oid, 'pg_class') AS note
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = %s AND c.relkind IN ('r', 'p')
+        """,
+        [TRASH_SCHEMA],
+    )
+    aliases: dict[str, str] = {}
+    for row in await cur.fetchall():
+        try:
+            note = json.loads(row["note"])[TRASH_NOTE]
+            aliases[row["relname"]] = str(note["name"])
+            aliases.update(note.get("renamed", {}))
+        except (TypeError, ValueError, KeyError):
+            # Dropped before the note existed: the name is "<action id>__<table>", maybe cut.
+            aliases[row["relname"]] = row["relname"].partition("__")[2] or row["relname"]
+    return aliases
+
+
+def untrash(text: str, aliases: dict[str, str]) -> str:
+    """Swap trashed names in text people see for the names they know."""
+    for trashed in sorted(aliases, key=len, reverse=True):
+        text = text.replace(trashed, aliases[trashed])
+    return text
 
 
 async def fk_edges(conn: AsyncConnection[Any], oids: list[int]) -> list[dict[str, Any]]:
