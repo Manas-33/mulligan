@@ -1,7 +1,15 @@
 // Typed client for the gateway REST API (contracts/openapi.yaml). Every route but /healthz needs
 // `Authorization: Bearer <dashboard token>`. Live updates (SSE /api/events) come in Phase 2.
 
-import type { Action, ActionStatus, Checksums, Session, SessionStatus, System } from "../types.ts";
+import type {
+  Action,
+  ActionStatus,
+  ApprovalDecision,
+  Checksums,
+  Session,
+  SessionStatus,
+  System,
+} from "../types.ts";
 
 export class ApiError extends Error {
   constructor(
@@ -17,21 +25,33 @@ export type ClientOptions = { baseUrl: string; token: string; fetch?: typeof fet
 export type ActionQuery = { session_id?: string; since?: string; system?: System; status?: ActionStatus };
 
 export function createClient({ baseUrl, token, fetch: doFetch = fetch }: ClientOptions) {
-  async function get<T>(path: string, query: Record<string, string | undefined> = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    { query = {}, body }: { query?: Record<string, string | undefined>; body?: unknown } = {},
+  ): Promise<T> {
     const url = new URL(path, baseUrl);
     for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, value);
-    const res = await doFetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    const body: unknown = await res.json().catch(() => null);
-    if (!res.ok) throw new ApiError(res.status, (body as { detail?: unknown } | null)?.detail ?? body);
-    return body as T;
+    const res = await doFetch(url, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data: unknown = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, (data as { detail?: unknown } | null)?.detail ?? data);
+    return data as T;
   }
 
   return {
-    health: () => get<{ ok: boolean }>("/healthz"),
-    listSessions: (status?: SessionStatus) => get<Session[]>("/api/sessions", { status }),
-    listActions: (query: ActionQuery = {}) => get<Action[]>("/api/actions", query),
-    getAction: (id: string) => get<Action>(`/api/actions/${encodeURIComponent(id)}`),
-    getChecksums: () => get<Checksums>("/api/checksums"),
+    health: () => request<{ ok: boolean }>("/healthz"),
+    listSessions: (status?: SessionStatus) => request<Session[]>("/api/sessions", { query: { status } }),
+    listActions: (query: ActionQuery = {}) => request<Action[]>("/api/actions", { query }),
+    getAction: (id: string) => request<Action>(`/api/actions/${encodeURIComponent(id)}`),
+    getChecksums: () => request<Checksums>("/api/checksums"),
+    /** Approve or reject a held action from the dashboard (needs its approval code). */
+    decide: (action: Action, decision: ApprovalDecision) =>
+      request<Action>(`/api/approvals/${encodeURIComponent(action.id)}/decision`, {
+        body: { decision, code: action.approval?.code ?? "", channel: "dashboard", decided_by: "dashboard" },
+      }),
   };
 }
 

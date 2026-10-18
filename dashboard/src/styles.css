@@ -1,0 +1,41 @@
+/* Placeholder styling until the Paper design. Light only for now. */
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #666666;
+  --line: #e5e5e5;
+  --accent: #1f4fd8;
+  --held: #b45309;
+  --bad: #b91c1c;
+  --ok: #15803d;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+body { margin: 0; }
+.app { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.topbar { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.topbar h1 { margin: 0; font-size: 22px; }
+.muted { color: var(--muted); font-size: 13px; }
+.error { color: var(--bad); }
+.columns { display: grid; grid-template-columns: 280px 1fr; gap: 16px; margin-top: 16px; }
+@media (max-width: 720px) { .columns { grid-template-columns: 1fr; } }
+.sessions { display: flex; flex-direction: column; gap: 6px; }
+.session { display: grid; gap: 2px; text-align: left; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer; font: inherit; }
+.session.active { border-color: var(--accent); }
+.timeline ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.action { display: grid; grid-template-columns: 90px 1fr auto; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.action-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.action p { margin: 6px 0 0; }
+.lane { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); margin-left: 4px; }
+.pill-held { border-color: var(--held); color: var(--held); }
+.pill-failed, .pill-revert_failed, .pill-rejected, .pill-expired { color: var(--bad); }
+.pill-executed, .pill-reverted, .pill-approved { color: var(--ok); }
+.held { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.held button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+.held button.secondary { background: none; color: var(--accent); }
+.held button:disabled { opacity: 0.5; cursor: default; }
+.conn { font-size: 12px; }
+.conn-live { color: var(--ok); }
+.conn-reconnecting, .conn-error { color: var(--bad); }

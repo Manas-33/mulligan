@@ -27,3 +27,15 @@ describe("api client", () => {
     expect(String(f.mock.calls[0]![0])).toBe("http://x/api/actions/act%2F1");
   });
 });
+
+describe("decide", () => {
+  it("posts the decision with the action's code from the dashboard", async () => {
+    const f = fakeFetch(200, {});
+    const action = { id: "act_1", approval: { code: "4821" } } as Parameters<ReturnType<typeof createClient>["decide"]>[0];
+    await createClient({ baseUrl: "http://x", token: "t", fetch: f }).decide(action, "reject");
+    const [url, init] = f.mock.calls[0]!;
+    expect(String(url)).toBe("http://x/api/approvals/act_1/decision");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ decision: "reject", code: "4821", channel: "dashboard", decided_by: "dashboard" });
+  });
+});
