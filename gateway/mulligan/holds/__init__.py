@@ -3,11 +3,12 @@
 * ``create_hold_manager``: the approval state machine. Texts the approver through the Photon
   service (iMessage), expires undecided holds, records payment authorizations and captures them
   when their undo window ends.
-* ``create_adapters``: the payments adapter (Stripe test mode); email comes next.
+* ``create_adapters``: the payments (Stripe test mode) and email (SMTP, Mailpit) adapters.
 """
 
 from __future__ import annotations
 
+from mulligan.holds.email import EmailAdapter
 from mulligan.holds.manager import PhotonHoldManager, hold_ttl
 from mulligan.holds.notify import PhotonNotifier
 from mulligan.holds.payments import PaymentsAdapter
@@ -32,4 +33,4 @@ def create_hold_manager(deps: HoldDeps) -> HoldManager:
 
 
 def create_adapters() -> list[Adapter]:
-    return [payments_adapter()]
+    return [payments_adapter(), EmailAdapter()]

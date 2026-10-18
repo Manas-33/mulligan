@@ -123,6 +123,10 @@ dashboard-check: ## Type-check, test and build the dashboard
 db: ## Start both Postgres DBs
 	docker compose up -d --wait mulligan-db prod-db
 
+.PHONY: mailpit
+mailpit: ## Start Mailpit (SMTP 127.0.0.1:1025, inbox http://127.0.0.1:8025)
+	docker compose up -d --wait mailpit
+
 .PHONY: up
 up: ## Start the whole stack
 	docker compose --profile app up -d --build --wait
