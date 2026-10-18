@@ -268,8 +268,14 @@ def rewind(actions: list, force_recreate=False) -> dict:
     or, with force_recreate, are recreated at their old position (new id)."""
     flagged, idmap, moved = [], {}, 0
     # Simulate each touched parent's child order through the undo, then apply it once at the end.
-    parents = {a["parent"] for a in actions if a["op"] in ("delete_block", "append_block")}
-    order = {p: [b["id"] for b in list_children(p)] for p in parents}
+    # Read lazily: a trashed page's children 404 until the trash_page undo has run.
+    order = {}
+
+    def sim(parent_id):
+        if parent_id not in order:
+            order[parent_id] = [b["id"] for b in list_children(parent_id)]
+        return order[parent_id]
+
     for a in reversed(actions):
         if current_hash(a) != a["after_hash"]:
             flagged.append(a)
@@ -280,13 +286,13 @@ def rewind(actions: list, force_recreate=False) -> dict:
         elif op == "update_prop":
             notion.pages.update(PAGE_ID, properties={a["name"]: a["before"]})
         elif op == "append_block":
+            sim(a["parent"]).remove(a["id"])  # read the order before this delete changes it
             notion.blocks.delete(a["id"])
-            order[a["parent"]].remove(a["id"])
         elif op == "update_block":
             notion.blocks.update(a["id"], **update_payload(a["before"]))
         elif op == "delete_block":
             # Newest-first means the sibling that preceded it at delete time is back in place now.
-            sib = order[a["parent"]]
+            sib = sim(a["parent"])
             if force_recreate:
                 anchor = idmap.get(a["prev"], a["prev"]) if a["prev"] else None
                 new_id = create_block(a["parent"], a["before"], anchor)
@@ -306,7 +312,7 @@ def text(s: str) -> list:
     return [{"type": "text", "text": {"content": s}}]
 
 
-def rogue_edit(snap: dict, rec: Recorder, trash=False):
+def rogue_edit(snap: dict, rec: Recorder, trash=True):
     """Rewrite several blocks the way a runaway pricing agent would."""
     by_text = {}
     for n in flat(snap["blocks"]):
@@ -330,7 +336,7 @@ def rogue_edit(snap: dict, rec: Recorder, trash=False):
     rec.append_block(PAGE_ID, {"type": "paragraph",
                                "paragraph": {"rich_text": text("New: Ultra plan, $999/month.")}})
     rec.update_props({"title": {"title": text("Acme Widgets — Pricing (v2, doubled)")}})
-    if trash:  # off: the API can trash a workspace-level page but never untrash it
+    if trash:  # the API can't untrash a workspace-level page; this one must have a parent page
         rec.trash_page()
     return {"basic_row": basic_row, "heading": snap["blocks"][0]}
 
@@ -355,11 +361,12 @@ def run():
           f"{len(flat(orig['blocks']))} blocks")
     results = {}
 
-    print("\n1a. Rogue edit, then rewind (untrash deleted blocks)")
+    print("\n1a. Rogue edit + page trash, then rewind (untrash deleted blocks)")
     rec = Recorder()
     rogue_edit(orig, rec)
     mid = snapshot()
-    print(f"  after rogue: hash {page_hash(mid)}, {len(rec.actions)} actions logged")
+    print(f"  after rogue: hash {page_hash(mid)}, in_trash={mid['page']['in_trash']}, "
+          f"{len(rec.actions)} actions logged")
     out = rewind(rec.actions)
     now = snapshot()
     ok = check("normalized hash matches original", page_hash(now) == h0, page_hash(now))
@@ -389,10 +396,17 @@ def run():
 
     print("\n2. Rogue edit, teammate fixes a price the agent wrote, then rewind")
     rec = Recorder()
-    hit = rogue_edit(orig, rec, trash=False)
+    hit = rogue_edit(orig, rec, trash=False)  # trashed below, after the teammate's edit
     row = hit["basic_row"]
     edited = notion.blocks.update(row["id"], table_row={"cells": [text("Widget Basic"), text("$15")]})
     teammate_cells = clean(edited["table_row"]["cells"])  # straight to Notion, not via Mulligan
+    rec.trash_page()
+    try:  # can a human still edit a block while its page is in the trash? (no-op write)
+        h = hit["heading"]
+        notion.blocks.update(h["id"], **update_payload({"type": h["type"], "body": clean(h["body"])}))
+        print("  note: editing a block inside a trashed page is allowed")
+    except APIResponseError as e:
+        print(f"  note: editing a block inside a trashed page is refused ({e.code})")
     out = rewind(rec.actions)
     flagged_ids = [a.get("id") for a in out["flagged"]]
     expected = copy.deepcopy(orig)
