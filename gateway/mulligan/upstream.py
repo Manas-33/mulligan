@@ -3,6 +3,7 @@ upstream__<server>__<tool>, labelled by the rules gate, logged, and never undone
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Callable, Mapping
@@ -25,6 +26,9 @@ log = logging.getLogger("mulligan.upstream")
 SERVER_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,15}$")
 MAX_TOOL_NAME = 64
 PREFIX = "upstream"
+# A call runs under the upstream system's lock, so one server that never answers would stall
+# every upstream call.
+TIMEOUT_S = 60.0
 
 # How to reach a server: a URL, or (in tests) anything mcp.Client accepts, such as an MCPServer.
 Target = Any
@@ -63,17 +67,21 @@ class UpstreamAdapter(Adapter):
     tools: ClassVar[frozenset[str]] = frozenset()  # dynamic; see `schemas`
 
     def __init__(
-        self, servers: Mapping[str, Target], connect: Callable[[Target], Client] | None = None
+        self,
+        servers: Mapping[str, Target],
+        connect: Callable[[Target], Client] | None = None,
+        timeout_s: float = TIMEOUT_S,
     ) -> None:
         self.servers = dict(servers)
         self.connect = connect or (lambda target: Client(target, mode="auto"))
+        self.timeout_s = timeout_s
         self.schemas: dict[str, UpstreamToolSchema] = {}
 
     async def discover(self) -> dict[str, UpstreamToolSchema]:
         """List every server's tools. A server that can't be reached is skipped with a warning."""
         for server, target in self.servers.items():
             try:
-                async with self.connect(target) as client:
+                async with asyncio.timeout(self.timeout_s), self.connect(target) as client:
                     listed = (await client.list_tools()).tools
             except Exception:  # noqa: BLE001 (one bad upstream shouldn't stop the gateway)
                 log.warning(
@@ -109,8 +117,17 @@ class UpstreamAdapter(Adapter):
 
     async def execute(self, call: ToolCall, before: Capture) -> ToolResult:
         schema = self.schemas[call.tool]
-        async with self.connect(self.servers[schema.server]) as client:
-            result = await client.call_tool(schema.name, call.args)
+        try:
+            async with (
+                asyncio.timeout(self.timeout_s),
+                self.connect(self.servers[schema.server]) as client,
+            ):
+                result = await client.call_tool(schema.name, call.args)
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"{schema.server}.{schema.name} didn't answer within {self.timeout_s:g} s;"
+                " it may have run"
+            ) from exc
         text = _text(result)
         content = dict(result.structured_content or {}) or ({"text": text} if text else {})
         summary = f"{schema.server}.{schema.name}" + (f": {text[:200]}" if text else "")
