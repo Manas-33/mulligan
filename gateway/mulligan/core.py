@@ -255,6 +255,8 @@ class Gateway:
 
     async def execute(self, action: Action, call: ToolCall) -> tuple[Action, ToolResult]:
         adapter = self.by_tool.get(call.tool)
+        if adapter is None and call.system is System.upstream and call.tool in self.upstream:
+            adapter = self.by_system.get(System.upstream)
         if adapter is None:
             raise ToolNotFound(call.tool)
         writes = action.reversibility.label is not ReversibilityLabel.read_only

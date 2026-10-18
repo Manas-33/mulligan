@@ -16,6 +16,7 @@ from mulligan.interfaces import Adapter
 from mulligan.mcp_server.server import create_mcp_app
 from mulligan.services import build_services
 from mulligan.settings import Settings
+from mulligan.upstream import UpstreamAdapter, parse_servers
 
 log = logging.getLogger("mulligan")
 
@@ -25,7 +26,13 @@ async def serve(settings: Settings) -> None:
     postgres = await PostgresAdapter.open(settings) if settings.prod_db_url else None
     if postgres:
         adapters.append(postgres)
+    upstream = UpstreamAdapter(parse_servers(settings.upstream_mcp_servers))
+    if upstream.servers:
+        await upstream.discover()
+        adapters.append(upstream)
+        log.info("upstream tools: %s", ", ".join(sorted(upstream.schemas)) or "none")
     services = await build_services(settings, adapters)
+    services.gateway.upstream.update(upstream.schemas)
     services.start_background()
     rest = create_app(settings, services=services)
     mcp = create_mcp_app(settings, services.gateway)
