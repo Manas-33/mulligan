@@ -1,0 +1,99 @@
+Postgres 16.15, TimescaleDB 2.30.2, psycopg 3.3.6
+    tables skipped by enable_schema (no PK): []
+
+== Typed tool guards
+[PASS] G1 empty filter without all=true is refused: filter is empty; pass all=true to touch every row
+[PASS] G2 table name is looked up in the catalog, not spliced: no table 'customers; DROP TABLE orders'
+[PASS] G3 filter column must exist: unknown column 'id) OR (1=1' on public.customers
+[PASS] G4 filter values are bound parameters: rowcount=0
+[PASS] G5 agent can't pick a GENERATED ALWAYS id: GeneratedAlways [428C9]: cannot insert a non-DEFAULT value into column "id"
+[PASS] G6 delete refused when a cascade target has no audit trigger: refusing DELETE: no audit trigger on support_tickets
+    mulligan.action_id after an action txn ends (same session): ''
+
+== Audit order vs trigger name (scratch schema)
+    trigger 'mulligan_audit_row' (name sorts after RI_*): {"audit order": ["p:D", "c:D", "c:D", "gc:D", "gc:D"], "plain reverse order": "fails: ForeignKeyViolation [23503]: insert or update on table \"gc\" violates foreign key constraint \"gc_c_id_fkey\"", "FK-sorted undo": ["p", "c", "gc"]}
+    trigger 'A_audit' (name sorts before RI_*): {"audit order": ["p:D", "c:D", "c:D", "gc:D", "gc:D"], "plain reverse order": "fails: ForeignKeyViolation [23503]: insert or update on table \"gc\" violates foreign key constraint \"gc_c_id_fkey\"", "FK-sorted undo": ["p", "c", "gc"]}
+[PASS] E1 cascade is logged parent first whatever the trigger name, so plain reverse order fails and the FK-sorted undo works
+
+== Canonical jsonb round-trip per column type (scratch schema)
+    canonical form per type: {"id (integer)": "1", "i2 (smallint)": "-32768", "i8 (bigint)": "9223372036854775807", "n (numeric)": "12345678901234567890.123456789000", "n_scaled (numeric(12,4))": "1.5000", "f4 (real)": "0.1", "f8 (double precision)": "0.30000000000000004", "f8_nan (double precision)": "\"NaN\"", "f8_ninf (double precision)": "\"-Infinity\"", "f8_tiny (double precision)": "0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005", "b (boolean)": "true", "t (text)": "\"tab\\there \\\"q\\\" \\\\ \u2713 \ud834\udd1e\"", "vc (character varying(5))": "\"abc\"", "ch (character(5))": "\"ab   \"", "d (date)": "\"2024-02-29\"", "d_inf (date)": "\"infinity\"", "ts (timestamp without time zone)": "\"2026-10-17T01:02:03.456789\"", "tstz (timestamp with time zone)": "\"2026-03-08T09:59:59.123456+00:00\"", "tstz_inf (timestamp with time zone)": "\"-infinity\"", "tm (time without time zone)": "\"23:59:59.999999\"", "tmtz (time with time zone)": "\"12:00:00+05:30\"", "iv (interval)": "\"P1Y2M3DT4H5M6.789S\"", "bin (bytea)": "\"\\\\x00ff10\"", "u (uuid)": "\"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11\"", "ip (inet)": "\"192.168.0.1/24\"", "net (cidr)": "\"10.0.0.0/8\"", "mac (macaddr)": "\"08:00:2b:01:02:03\"", "e (probe3.mood)": "\"meh\"", "r (int4range)": "\"[1,10)\"", "tsr (tstzrange)": "\"[\\\"2026-01-01 00:00:00+00\\\",\\\"2026-02-01 00:00:00+00\\\")\"", "arr (integer[])": "[1, null, 3]", "arr2 (text[])": "[[\"a\", \"b\"], [\"c\", \"d\"]]", "jb (jsonb)": "{\"a\": 2, \"b\": 1}", "jb_null (jsonb)": "null", "js (json)": "{\"a\": 3, \"b\": 1}", "x (xml)": "\"<a x=\\\"1\\\">t</a>\"", "m (money)": "\"$1,234.56\"", "bits (bit varying)": "\"10110\"", "tsv (tsvector)": "\"'cat':1 'fat':2\"", "pt (point)": "\"(1.5,-2)\"", "comp (probe3.pair)": "{\"a\": 1, \"b\": \"x\"}", "dom (probe3.pos)": "7"}
+    columns that don't round-trip: {"jb_null": "'null' -> None", "js": "'{\"b\": 1,   \"a\": 2, \"a\": 3}' -> '{\"a\": 3, \"b\": 1}'"}
+[PASS] E10 40/42 column types round-trip exactly; only json and jsonb JSON-null are lossy: lossy=['jb_null', 'js']
+
+== Session: typed writes
+    A1 pg_insert_rows act_01M5648KXNAQGM7FPTSY1AFMRE: {"rowcount": 2, "direct": 2, "audit": ["products:I*", "products:I*"]}
+    A2 pg_update_rows act_01M5648KXY37E4S1Z0G8KBQYKM: {"rowcount": 3, "direct": 3, "audit": ["products:U*", "products:U*", "products:U*"]}
+    A3 pg_delete_rows act_01M5648KY4B89HC8AS6R26PBJQ: {"rowcount": 1, "direct": 1, "audit": ["customers:D*", "orders:D", "orders:D", "support_tickets:D", "support_tickets:D", "customer_notes:U", "customer_notes:U", "order_items:D", "order_items:D", "order_items:D", "order_items:D", "order_items:D"]}
+    A4 pg_delete_rows act_01M5648KYFDQ38Y4TV7C98KAX6: {"rowcount": 1, "direct": 1, "audit": ["employees:D*", "employees:D", "employees:D", "employees:D", "employees:D", "employees:D", "employees:D"]}
+    A5 pg_delete_rows act_01M5648KYR0E2JR1CG2FATRAHY: {"rowcount": 2, "direct": 2, "audit": ["customers:D*", "customers:D*", "orders:D", "support_tickets:D", "orders:D", "orders:D", "customer_notes:U", "order_items:D", "order_items:D", "order_items:D", "order_items:D", "order_items:D", "order_items:D"]}
+    A6 pg_insert_rows act_01M5648KZ0B86A14NHZ2Q3T2ER: {"rowcount": 1, "direct": 1, "audit": ["orders:I*"]}
+    A7 pg_update_rows act_01M5648KZ5KX3QAA51DRZHX0ZB: {"rowcount": 1, "direct": 1, "audit": ["order_items:U*"]}
+    A8 pg_drop_table act_01M5648KZD00NEAEPXCDT4DVXV: {"rowcount": 0, "direct": 0, "audit": []}
+    A9 pg_drop_table act_01M5648KZQ2JGNNHJ60G71AMBV: {"rowcount": 0, "direct": 0, "audit": []}
+    A3 cascade audit rows by table: ["customer_notes:UPDATE", "customers:DELETE", "order_items:DELETE", "orders:DELETE", "support_tickets:DELETE"]
+    example audit row (SET NULL cascade): {"id": 32, "action_id": "act_01M5648KY4B89HC8AS6R26PBJQ", "schema_name": "public", "table_name": "customer_notes", "op": "UPDATE", "pk": {"id": "00000000-0000-4000-8000-000000000001"}, "changed": ["customer_id"], "old_row": {"id": "00000000-0000-4000-8000-000000000001", "body": "VIP, call before shipping", "customer_id": 1}, "new_row": {"id": "00000000-0000-4000-8000-000000000001", "body": "VIP, call before shipping", "customer_id": null}}
+    example after_hashes keys: ["postgres:products/5/attrs", "postgres:products/5/id", "postgres:products/5/name", "postgres:order_items/1,1", "postgres:legacy_pricing"]
+    A3 plain reverse audit order: fails: ForeignKeyViolation [23503]: insert or update on table "order_items" violates foreign key constraint "order_items_order_id_fkey"
+    A4 plain reverse audit order: fails: ForeignKeyViolation [23503]: insert or update on table "employees" violates foreign key constraint "employees_manager_id_fkey"
+    re-insert into GENERATED ALWAYS identity without OVERRIDING SYSTEM VALUE: GeneratedAlways [428C9]: cannot insert a non-DEFAULT value into column "id"
+
+== Soft drop while trashed
+    inverse payload: {"kind": "pg_undrop", "payload": {"table_oid": 20649, "schema": "public", "name": "legacy_pricing", "trash_schema": "mulligan_trash", "trash_name": "act_01m5648kzd00neaepxcdt4dvxv__legacy_pricing", "renamed": [{"kind": "sequence", "name": "legacy_pricing_id_seq", "trash_name": "act_01m5648kzd00neaepxcdt4dvxv_s1"}, {"kind": "index", "name": "legacy_pricing_pkey", "trash_name": "act_01m5648kzd00neaepxcdt4dvxv_i2"}, {"kind": "index", "name": "legacy_pricing_product_id_region_key", "trash_name": "act_01m5648kzd00neaepxcdt4dvxv_i3"}, {"kind": "index", "name": "legacy_pricing_region_idx", "trash_name": "act_01m5648kzd00neaepxcdt4dvxv_i4"}], "inbound_fks": [{"child": "price_overrides", "conname": "price_overrides_legacy_pricing_id_fkey"}]}}
+[PASS] E5 SET SCHEMA carried PK, indexes, identity sequence, triggers, inbound FKs, grants: indexes=['act_01m5648kzd00neaepxcdt4dvxv_i2', 'act_01m5648kzd00neaepxcdt4dvxv_i3', 'act_01m5648kzd00neaepxcdt4dvxv_i4'] seq=['act_01m5648kzd00neaepxcdt4dvxv_s1']
+[PASS] C3 read-only role can't see mulligan_trash (or mulligan_audit): USAGE trash=False audit=False; select trashed: InsufficientPrivilege [42501]: permission denied for schema mulligan_trash; select old name: UndefinedTable [42P01]: relation "legacy_pricing" does not exist
+    RO can still list trashed table names via pg_class (not data): ["act_01m5648kzd00neaepxcdt4dvxv__legacy_pricing", "act_01m5648kzq2jgnnhj60g71ambv__quarterly_revenue_snapshots_by_"]
+    RO information_schema.tables rows for mulligan_trash: 2
+    RO reads the trashed table through an existing view legacy_pricing_v (rows): 12
+    insert into child whose FK points at the trashed table: works: the FK check reads the trashed table
+[PASS] E4 trash names fit in 63 bytes and keep the whole action id: trash_name='act_01m5648kzq2jgnnhj60g71ambv__quarterly_revenue_snapshots_by_' (63 bytes)
+    naive '<table>__<action_id>' (90 bytes) silently became: 'quarterly_revenue_snapshots_by_region_and_sales_channel_v2__act' (63 bytes)
+    multibyte name (74 bytes) became: 'préférences_historique_ünïcödé_préférences_historique_' (62 bytes, valid UTF-8)
+    fit_ident on multibyte: 63 bytes, ends 'ééé'
+
+== Undo, newest action first
+[PASS] H.A9 after_hashes match the live DB before undo (1 keys): mismatched=[]
+[PASS] U.A9 undo pg_drop_table: checksum equals pre-action: order=['quarterly_revenue_snapshots_by_region_and_sales_channel_v2'] diff=[]
+[PASS] H.A8 after_hashes match the live DB before undo (1 keys): mismatched=[]
+[PASS] U.A8 undo pg_drop_table: checksum equals pre-action: order=['legacy_pricing'] diff=[]
+[PASS] H.A7 after_hashes match the live DB before undo (1 keys): mismatched=[]
+[PASS] U.A7 undo pg_update_rows: checksum equals pre-action: order=['order_items'] diff=[]
+[PASS] H.A6 after_hashes match the live DB before undo (4 keys): mismatched=[]
+[PASS] U.A6 undo pg_insert_rows: checksum equals pre-action: order=['orders'] diff=[]
+[PASS] H.A5 after_hashes match the live DB before undo (13 keys): mismatched=[]
+[PASS] U.A5 undo pg_delete_rows: checksum equals pre-action: order=['customers', 'orders', 'support_tickets', 'customer_notes', 'order_items'] diff=[]
+[PASS] H.A4 after_hashes match the live DB before undo (7 keys): mismatched=[]
+[PASS] U.A4 undo pg_delete_rows: checksum equals pre-action: order=['employees'] diff=[]
+    A4 re-insert order (employees ids): ["{'id': 10}", "{'id': 3}", "{'id': 12}", "{'id': 7}", "{'id': 15}", "{'id': 1}", "{'id': 2}"]
+[PASS] H.A3 after_hashes match the live DB before undo (12 keys): mismatched=[]
+[PASS] U.A3 undo pg_delete_rows: checksum equals pre-action: order=['customers', 'orders', 'support_tickets', 'customer_notes', 'order_items'] diff=[]
+[PASS] H.A2 after_hashes match the live DB before undo (6 keys): mismatched=[]
+[PASS] U.A2 undo pg_update_rows: checksum equals pre-action: order=['products'] diff=[]
+[PASS] H.A1 after_hashes match the live DB before undo (16 keys): mismatched=[]
+[PASS] U.A1 undo pg_insert_rows: checksum equals pre-action: order=['products'] diff=[]
+[PASS] C1 session checksum after undo equals before (incl. customer delete cascading into orders, order_items, support_tickets, customer_notes): start=b44e402b5f55775e end=b44e402b5f55775e
+[PASS] C2 dropped table is back with data, PK, indexes, identity sequence, triggers, grants and inbound FKs: structure equal=True; inbound FK enforced=True; RO rows=12
+
+== pg_query (mulligan_ro, READ ONLY, statement_timeout)
+[PASS] C4 runaway pg_query is killed by statement_timeout: QueryCanceled [57014]: canceling statement due to statement timeout after 5.00s
+[PASS] Q1 resetting statement_timeout inside the query doesn't disarm it: QueryCanceled [57014]: canceling statement due to statement timeout after 5.01s
+[PASS] Q2 multiple statements are rejected: SyntaxError [42601]: cannot insert multiple commands into a prepared statement
+[PASS] Q3 refused: DELETE FROM customers: SyntaxError [42601]: syntax error at or near "DELETE"
+[PASS] Q4 refused: WITH d AS (DELETE FROM customers RETURNING *) SELECT * FROM d: FeatureNotSupported [0A000]: DECLARE CURSOR must not contain data-modifying statements in WITH
+[PASS] Q5 refused: SELECT nextval('products_id_seq'): InsufficientPrivilege [42501]: permission denied for sequence products_id_seq
+[PASS] Q6 refused: SELECT * FROM mulligan_audit.audit_log: InsufficientPrivilege [42501]: permission denied for schema mulligan_audit
+[PASS] Q7 refused: SELECT * FROM mulligan_trash.anything: InsufficientPrivilege [42501]: permission denied for schema mulligan_trash
+[PASS] Q8 '%' and '{}' in agent SQL are passed through untouched: [{"name": "Customer 2"}]
+[PASS] Q9 the per-transaction timeout is the one that fires (1 s, below the role's 5 s backstop): after 1.01s
+[PASS] Q10 row cap: only row_cap + 1 rows fetched, truncated flag set
+
+== Same table name dropped twice (scratch schema)
+    naive soft drop, second time: DuplicateTable [42P07]: relation "dup_pkey" already exists in schema "mulligan_trash"
+[PASS] E8 soft drop renames indexes/sequences, so a second drop of the same name works: renamed=['act_01m5648z1hvv611x0t5ry7e2p3_s1', 'act_01m5648z1hvv611x0t5ry7e2p3_i2', 'act_01m5648z1hvv611x0t5ry7e2p3_i3', 'act_01m5648z1hvv611x0t5ry7e2p3_i4']
+[PASS] E9 undo of the older drop is a conflict when the name was reused: names already taken in probe2: ['dup', 'dup_id_seq', 'dup_pkey', 'dup_v_idx', 'dup_v_key']
+
+== Summary
+  C1 PASS  session checksum after undo equals before (incl. customer delete cascading into orders, order_items, support_tickets, customer_notes)
+  C2 PASS  dropped table is back with data, PK, indexes, identity sequence, triggers, grants and inbound FKs
+  C3 PASS  read-only role can't see mulligan_trash (or mulligan_audit)
+  C4 PASS  runaway pg_query is killed by statement_timeout
+  44/44 checks passed
