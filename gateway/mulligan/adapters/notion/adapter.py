@@ -26,6 +26,7 @@ from mulligan.adapters.notion.client import (
 )
 from mulligan.adapters.notion.normalize import (
     ABSENT,
+    CELL_SEP,
     OWN_PAGES,
     READ_ONLY_PROPS,
     ToolError,
@@ -91,6 +92,13 @@ def match_hash(form: dict[str, Any]) -> str:
     """What an appended block is recognized by when its id is unknown: its type and text. Notion
     adds defaults (annotations, color) to what was sent, so the whole form wouldn't match."""
     return sha([form["type"], form_text(form)])
+
+
+def sent_match(form: dict[str, Any], text: str) -> str:
+    """`match_hash` of a block once `text` replaced its text (cells trimmed, as Notion keeps)."""
+    if form["type"] == "table_row":
+        text = CELL_SEP.join(c.strip() for c in text.split(CELL_SEP.strip()))
+    return sha([form["type"], text])
 
 
 def appended_field(page_id: str, blk: dict[str, Any]) -> dict[str, Any]:
@@ -298,6 +306,7 @@ class NotionAdapter(Adapter):
             req_props[name] = {prop["type"]: prop_request(prop["type"], value)}
         nodes = {n["id"]: n for n in flat(snap["blocks"])}
         updates: dict[str, dict[str, Any]] = {}
+        texts: dict[str, str] = {}
         for item in updates_in:
             try:
                 block_id = normalize_id(str(item.get("block_id", "")))
@@ -306,7 +315,8 @@ class NotionAdapter(Adapter):
             if block_id not in nodes:
                 raise ToolError(f"block {block_id} isn't on this page")
             updates.pop(block_id, None)
-            updates[block_id] = text_update(block_form(nodes[block_id]), str(item.get("text", "")))
+            texts[block_id] = str(item.get("text", ""))
+            updates[block_id] = text_update(block_form(nodes[block_id]), texts[block_id])
         appends = [append_payload(item) for item in appends_in]
         if len(appends) > MAX_APPEND:
             raise ToolError(f"append at most {MAX_APPEND} blocks per call")
@@ -328,6 +338,9 @@ class NotionAdapter(Adapter):
                             "before": b,
                             "before_value": prop_value(b),
                             "agent_value": None,
+                            # What was sent, so a rewind knows the agent's value if the reply
+                            # was lost (no hash from a response).
+                            "sent": props_in[name],
                         }
                     )
                 after = await self.client.update_page(page_id, properties=req_props)
@@ -346,6 +359,7 @@ class NotionAdapter(Adapter):
                     "before": b,
                     "before_value": form_text(b),
                     "agent_value": None,
+                    "sent_match": sent_match(b, texts[block_id]),
                 }
                 sending = [f]
                 after = await self.client.update_block(block_id, **payload)
@@ -566,6 +580,12 @@ class NotionAdapter(Adapter):
             restore: dict[str, Any] = {}
             for f in (f for f in rest if f["kind"] == "property"):
                 current = prop_form(page.get("properties", {}).get(f["name"]))
+                if (
+                    f["key"] not in agent_hashes
+                    and "sent" in f
+                    and prop_value(current) == f["sent"]
+                ):
+                    agent_hashes[f["key"]] = form_hash(current)  # its reply was lost; it landed
                 if decide(f, form_hash(current), prop_value(current)):
                     restore[f["name"]] = restore_prop(f["before"])
             if restore and apply:
@@ -575,6 +595,13 @@ class NotionAdapter(Adapter):
             for f in (f for f in rest if f["kind"] == "block"):
                 blk = await self._block(f["block_id"])
                 h = block_hash(blk, in_trash)
+                if (
+                    f["key"] not in agent_hashes
+                    and f.get("sent_match")
+                    and blk is not None
+                    and match_hash(block_form(blk)) == f["sent_match"]
+                ):
+                    agent_hashes[f["key"]] = h  # its reply was lost; it landed
                 shown = form_text(block_form(blk)) if blk is not None and h != ABSENT else None
                 if decide(f, h, shown):
                     done["block"] += 1

@@ -412,6 +412,66 @@ async def test_a_roll_back_that_fails_keeps_an_inverse_for_the_rewind(
     assert fake.page["properties"]["title"]["title"][0]["plain_text"] == "Changed"
 
 
+async def test_a_landed_write_that_couldnt_be_rolled_back_is_undone_by_the_rewind(
+    adapter: NotionAdapter, fake: FakeNotion, no_sleep: None
+) -> None:
+    pro = fake.find("Pro: $99/month")
+
+    def broken(request: httpx.Request) -> httpx.Response | None:
+        if request.method == "PATCH" and request.url.path.endswith(pro):
+            if "Pro: $1" in request.content.decode():
+                fake.fail = None
+                fake.handle(request)  # it lands; the reply is lost every time
+                fake.fail = broken
+                raise httpx.ReadTimeout("timed out", request=request)
+            return httpx.Response(503, json={"code": "service_unavailable", "message": "down"})
+        return None
+
+    fake.fail = broken
+    call = ToolCall(
+        action_id="act_" + "0" * 26,
+        session_id="ses_" + "0" * 26,
+        agent=AGENT,
+        tool="notion_update_page",
+        system=System.notion,
+        args={"page_id": fake.page_id, "block_updates": [{"block_id": pro, "text": "Pro: $1"}]},
+    )
+    before = await adapter.capture_before(call)
+    with pytest.raises(WriteUncertain) as raised:
+        await adapter.execute(call, before)
+    fake.fail = None
+    assert fake.text(pro) == "Pro: $1"
+    action = Action(
+        id=call.action_id,
+        session_id=call.session_id,
+        agent=AGENT,
+        system=System.notion,
+        tool=call.tool,
+        upstream_server=None,
+        args_redacted=call.args,
+        status=ActionStatus.failed,
+        reversibility=Reversibility(
+            label=ReversibilityLabel.reversible, source=ReversibilitySource.policy, reason=None
+        ),
+        summary=None,
+        error=str(raised.value),
+        before_ref=raised.value.before_ref,
+        after_ref=None,
+        after_hashes=raised.value.after_hashes,
+        inverse=raised.value.inverse,
+        approval=None,
+        hold=None,
+        explanation=None,
+        sentry_trace_id=None,
+        created_at=datetime(2026, 10, 18, tzinfo=UTC),
+        executed_at=None,
+        reverted_at=None,
+    )
+    step = await adapter.revert(action)
+    assert step.result is StepResult.restored, step.detail
+    assert fake.text(pro) == "Pro: $99/month"
+
+
 async def test_editing_a_trashed_page_is_refused(adapter: NotionAdapter, fake: FakeNotion) -> None:
     fake.page["in_trash"] = True
     result, _ = await Runner(adapter).call(
