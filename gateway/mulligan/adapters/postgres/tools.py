@@ -4,12 +4,14 @@ types with jsonb_populate_record (the same conversion undo uses to put old rows 
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from psycopg import AsyncConnection, sql
 from psycopg.types.json import Jsonb
 
 from mulligan.adapters.postgres.catalog import (
+    TRASH_NOTE,
     TRASH_SCHEMA,
     Table,
     ToolError,
@@ -159,6 +161,8 @@ async def soft_drop(conn: AsyncConnection[Any], t: Table, action_id: str) -> dic
         [t.oid, t.oid],
     )
     views = [r["view"] for r in await cur.fetchall()]
+    cur = await conn.execute("SELECT obj_description(%s::oid, 'pg_class') AS note", [t.oid])
+    note: Any = await cur.fetchone()
     renamed = []
     for n, d in enumerate(deps, 1):
         kw = "INDEX" if d["kind"] == "i" else "SEQUENCE"
@@ -179,6 +183,18 @@ async def soft_drop(conn: AsyncConnection[Any], t: Table, action_id: str) -> dic
             sql.Identifier(t.schema, trash_table), sql.Identifier(TRASH_SCHEMA)
         )
     )
+    # So messages about the trashed table (cascade counts, FK errors) can use its old names.
+    trashed = {
+        "schema": t.schema,
+        "name": t.name,
+        "renamed": {r["trash_name"]: r["name"] for r in renamed},
+    }
+    await conn.execute(
+        sql.SQL("COMMENT ON TABLE {} IS {}").format(
+            sql.Identifier(TRASH_SCHEMA, trash_table),
+            sql.Literal(json.dumps({TRASH_NOTE: trashed})),
+        )
+    )
     return {
         "table_oid": t.oid,
         "schema": t.schema,
@@ -188,6 +204,7 @@ async def soft_drop(conn: AsyncConnection[Any], t: Table, action_id: str) -> dic
         "renamed": renamed,
         "inbound_fks": inbound,
         "dependent_views": views,
+        "comment": note["note"],  # put back on undrop
     }
 
 

@@ -337,6 +337,71 @@ async def test_rows_changed_then_table_dropped(svc: Services, human: Any) -> Non
     assert await scalar(human, "select count(*) from price_overrides") == 12
 
 
+async def test_cascade_into_a_dropped_table_verifies_and_keeps_old_names(
+    svc: Services, human: Any
+) -> None:
+    adapter = svc.gateway.by_system[PostgresAdapter.system]
+    before = await adapter.checksum()
+    await human.execute("comment on table orders is 'Every order'")
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    call = svc.gateway.call_tool
+    await call(session, "pg_drop_table", {"table": "orders"})
+    one = [{"column": "id", "op": "eq", "value": 2}]
+    deleted = await call(session, "pg_delete_rows", {"table": "customers", "filter": one})
+    assert deleted.structured_content["cascaded"] == {"orders": 1, "order_items": 2}
+    assert "act_" not in deleted.summary
+    bad = await call(
+        session,
+        "pg_insert_rows",
+        {
+            "table": "order_items",
+            "rows": [{"order_id": 9999, "line_no": 1, "product_id": 1, "qty": 1, "unit_price": 1}],
+        },
+    )
+    assert bad.is_error and '"orders"' in bad.summary and "act_" not in bad.summary
+    job = await rewind(svc, session)
+    assert job.status is RewindJobStatus.completed, job.verification
+    assert all("act_" not in (s.detail or "") for s in job.steps)
+    assert await adapter.checksum() == before
+    assert await scalar(human, "select obj_description('orders'::regclass, 'pg_class')") == (
+        "Every order"
+    )
+
+
+async def test_kept_edit_under_a_generated_column_verifies(svc: Services, human: Any) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    item = [
+        {"column": "order_id", "op": "eq", "value": 2},
+        {"column": "line_no", "op": "eq", "value": 1},
+    ]
+    await svc.gateway.call_tool(
+        session, "pg_update_rows", {"table": "order_items", "filter": item, "values": {"qty": 7}}
+    )
+    await human.execute("update order_items set qty = 42 where order_id = 2 and line_no = 1")
+    job = await rewind(svc, session)
+    assert job.steps[0].kept_fields == ["postgres:order_items/2,1/qty"]
+    assert job.status is RewindJobStatus.completed and job.verification["postgres"].ok is True
+
+
+async def test_primary_key_change_then_drop_verifies(svc: Services) -> None:
+    adapter = svc.gateway.by_system[PostgresAdapter.system]
+    before = await adapter.checksum()
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    item = [
+        {"column": "order_id", "op": "eq", "value": 2},
+        {"column": "line_no", "op": "eq", "value": 1},
+    ]
+    await svc.gateway.call_tool(
+        session,
+        "pg_update_rows",
+        {"table": "order_items", "filter": item, "values": {"line_no": 127}},
+    )
+    await svc.gateway.call_tool(session, "pg_drop_table", {"table": "order_items"})
+    job = await rewind(svc, session)
+    assert job.status is RewindJobStatus.completed and job.verification["postgres"].ok is True
+    assert await adapter.checksum() == before
+
+
 async def test_verification_catches_a_bad_restore(svc: Services, human: Any) -> None:
     session = await svc.gateway.start_session(AGENT, SessionMode.live)
     wid = [{"column": "sku", "op": "eq", "value": "WID-002"}]

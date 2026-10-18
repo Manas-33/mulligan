@@ -11,12 +11,14 @@ from functools import partial
 from typing import Any, ClassVar
 from uuid import UUID
 
+import psycopg
 from psycopg import AsyncConnection, sql
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 from psycopg_pool import AsyncConnectionPool
 
 from mulligan.adapters.postgres.catalog import (
+    TRASH_SCHEMA,
     Table,
     ToolError,
     UndoError,
@@ -24,6 +26,8 @@ from mulligan.adapters.postgres.catalog import (
     load_table,
     resolve_table,
     seg,
+    trash_aliases,
+    untrash,
 )
 from mulligan.adapters.postgres.tools import (
     check_writable,
@@ -169,6 +173,11 @@ class PostgresAdapter(Adapter):
             return ToolResult(
                 structured_content={"error": str(exc)}, summary=str(exc), is_error=True
             )
+        except psycopg.Error as exc:
+            # e.g. an FK error naming a table that's in the trash: say the name the agent knows.
+            async with self.pool.connection() as conn:
+                message = untrash(str(exc), await trash_aliases(conn))
+            return ToolResult(structured_content={"error": message}, summary=message, is_error=True)
 
     async def _query(self, args: dict[str, Any]) -> ToolResult:
         max_rows = min(int(args.get("max_rows") or 200), self.settings.pg_query_max_rows)
@@ -213,6 +222,8 @@ class PostgresAdapter(Adapter):
                     [call.action_id],
                 )
                 audit: list[Any] = await cur.fetchall()
+                trashed = any(a["schema_name"] == TRASH_SCHEMA for a in audit)
+                aliases = await trash_aliases(conn) if trashed else {}
         direct = {json.dumps([r["j"][c] for c in t.pk], default=str) for r in touched}
         cascaded: Counter[str] = Counter()
         for a in audit:
@@ -222,7 +233,8 @@ class PostgresAdapter(Adapter):
                 else None
             )
             if key not in direct:
-                cascaded[a["table_name"]] += 1
+                # A cascade can reach a table in the trash; count it under its old name.
+                cascaded[aliases.get(a["table_name"], a["table_name"])] += 1
         before.state.update(
             {
                 "after_hashes": hashes,
@@ -477,7 +489,9 @@ class PostgresAdapter(Adapter):
                     )
 
         kept = any(c.outcome is FieldChangeOutcome.keep_human_edit for c in changes)
-        detail = _describe(audit, tables, revert_ids, restore_cols)
+        in_trash = any(t.schema == TRASH_SCHEMA for t in tables.values())
+        aliases = await trash_aliases(conn) if in_trash else {}
+        detail = _describe(audit, tables, revert_ids, restore_cols, aliases)
         if not apply:
             return self._step(action, changes, StepResult.pending, detail)
         await self._apply(conn, audit, tables, revert_ids, restore_cols)
@@ -598,32 +612,49 @@ class PostgresAdapter(Adapter):
             )
             audit: list[Any] = await cur.fetchall()
             tables: dict[int, Table] = {}
-            first: dict[str, Any] = {}
+            # Row key -> the audit rows that touched it, oldest first, each with the image that
+            # holds the key: 'pk', or 'old_row' where an UPDATE moved the row off this key.
+            touches: dict[str, list[tuple[Any, str]]] = defaultdict(list)
             changed: dict[str, set[str]] = defaultdict(set)
             for a in audit:
                 if a["table_oid"] not in tables:
                     tables[a["table_oid"]] = await load_table(conn, a["table_oid"])
-                key = tables[a["table_oid"]].row_key(a["pk"])
-                first.setdefault(key, a)
+                t = tables[a["table_oid"]]
+                key = t.row_key(a["pk"])
+                touches[key].append((a, "pk"))
                 changed[key].update(a["changed"] or [])
-            for row_key, a in first.items():
+                if _moves_pk(t, a):
+                    old_key = t.row_key({c: a["old_row"][c] for c in t.pk})
+                    touches[old_key].append((a, "old_row"))
+                    changed[old_key].update(a["changed"])
+            for row_key, entries in touches.items():
+                a, by = entries[0]
+                t = tables[a["table_oid"]]
                 cols = kept.get(row_key)
-                if a["op"] == "UPDATE":
+                arrived = by == "pk" and (a["op"] == "INSERT" or _moves_pk(t, a))
+                if not arrived and a["op"] == "UPDATE":
                     # Columns the session changed go back to their old values unless a human
                     # kept them; columns it never touched are whatever people left there.
-                    restore = changed[row_key] - (cols or set())
-                    h = await self._row_hashes(conn, tables[a["table_oid"]], a, restore)
+                    # Generated columns follow from the others, so they're left as they are.
+                    restore = {
+                        c
+                        for c in changed[row_key] - (cols or set())
+                        if c in t.columns and not t.columns[c].generated
+                    }
+                    h = await self._row_hashes(conn, t, a, restore, by)
                     actual += h["cur"]
                     if row_key in kept and cols is None:
                         expected += h["cur"]
                     elif not h["gone"]:
                         expected += h["upd"]
+                    elif by == "old_row":
+                        expected += h["pre"]  # the row should be back on its old key
                     continue
-                h = await self._row_hashes(conn, tables[a["table_oid"]], a, set())
+                h = await self._row_hashes(conn, t, a, set(), by)
                 actual += h["cur"]
                 if row_key in kept:
                     expected += h["cur"]
-                elif a["op"] == "DELETE":
+                elif not arrived:
                     expected += h["pre"]
             created = {a.id: a.created_at for a in actions}
             for action in actions:
@@ -637,19 +668,16 @@ class PostgresAdapter(Adapter):
                 # Rows of this table the session also wrote are already counted above: take
                 # their drop-time form out of the expected side and their current form out of
                 # the actual side.
-                for row_key, a in first.items():
+                for entries in touches.values():
+                    a, by = entries[0]
                     if a["table_oid"] != p["table_oid"]:
                         continue
-                    before_drop = [
-                        r
-                        for r in audit
-                        if r["table_oid"] == p["table_oid"]
-                        and tables[r["table_oid"]].row_key(r["pk"]) == row_key
-                        and created.get(r["action_id"], action.created_at) < action.created_at
-                    ]
-                    if before_drop and before_drop[-1]["op"] != "DELETE":
-                        expected -= await self._audit_hash(conn, path, before_drop[-1]["id"])
-                    h = await self._row_hashes(conn, tables[a["table_oid"]], a, None)
+                    form = _drop_time_form(
+                        tables[a["table_oid"]], entries, created, action.created_at
+                    )
+                    if form is not None:
+                        expected -= await self._audit_hash(conn, path, *form)
+                    h = await self._row_hashes(conn, tables[a["table_oid"]], a, None, by)
                     actual -= h["cur"]
                 try:
                     t = await load_table(conn, p["table_oid"])
@@ -659,20 +687,31 @@ class PostgresAdapter(Adapter):
                     actual += await self._table_sum(conn, t, path)
         return f"{expected % MOD:064x}", f"{actual % MOD:064x}"
 
-    async def _audit_hash(self, conn: AsyncConnection[Any], path: str, audit_id: int) -> int:
+    async def _audit_hash(
+        self, conn: AsyncConnection[Any], path: str, audit_id: int, image: str
+    ) -> int:
+        """Row hash of one audit row's 'old_row' or 'new_row'."""
         cur = await conn.execute(
-            "SELECT mulligan_audit.field_hash(jsonb_build_array(%s::text, new_row)) AS h"
-            " FROM mulligan_audit.audit_log WHERE id = %s",
+            sql.SQL(
+                "SELECT mulligan_audit.field_hash(jsonb_build_array(%s::text, {})) AS h"
+                " FROM mulligan_audit.audit_log WHERE id = %s"
+            ).format(sql.Identifier(image)),
             [path, audit_id],
         )
         row: Any = await cur.fetchone()
         return int(row["h"], 16)
 
     async def _row_hashes(
-        self, conn: AsyncConnection[Any], t: Table, a: dict[str, Any], cols: set[str] | None
+        self,
+        conn: AsyncConnection[Any],
+        t: Table,
+        a: dict[str, Any],
+        cols: set[str] | None,
+        by: str = "pk",
     ) -> dict[str, Any]:
-        """pre: the audit row's old form. cur: the live row (0 if gone). upd: the live row with
-        `cols` put back to their old values."""
+        """pre: the audit row's old form. cur: the live row (0 if gone), looked up by the key in
+        `by` ('pk', or 'old_row' for the key an UPDATE moved the row off). upd: the live row
+        with `cols` put back to their old values."""
         q = sql.SQL(
             """
             SELECT mulligan_audit.field_hash(jsonb_build_array(%(p)s::text, a.old_row)) AS pre,
@@ -684,11 +723,11 @@ class PostgresAdapter(Adapter):
               FROM mulligan_audit.audit_log a
               LEFT JOIN LATERAL (
                    SELECT mulligan_audit.canon_row(tgt) AS j FROM {t} AS tgt
-                    CROSS JOIN LATERAL jsonb_populate_record(NULL::{t}, a.pk) AS w
+                    CROSS JOIN LATERAL jsonb_populate_record(NULL::{t}, {by}) AS w
                     WHERE {m}) AS cur ON true
              WHERE a.id = %(id)s
             """
-        ).format(t=t.ident, m=t.pk_match("tgt", "w"))
+        ).format(t=t.ident, m=t.pk_match("tgt", "w"), by=sql.Identifier("a", by))
         cur = await conn.execute(q, {"p": t.path, "cols": sorted(cols or []), "id": a["id"]})
         h: Any = await cur.fetchone()
         return {
@@ -697,6 +736,27 @@ class PostgresAdapter(Adapter):
             "upd": int(h["upd"], 16),
             "gone": h["gone"],
         }
+
+
+def _moves_pk(t: Table, a: dict[str, Any]) -> bool:
+    """An UPDATE that changed a primary-key column: the row moved to a new key."""
+    return a["op"] == "UPDATE" and bool(set(a["changed"] or []) & set(t.pk))
+
+
+def _drop_time_form(
+    t: Table, entries: list[tuple[Any, str]], created: dict[str, datetime], dropped_at: datetime
+) -> tuple[int, str] | None:
+    """(audit id, image) holding the row at this key when its table was dropped, or None if
+    no row had the key then. Writes after the drop (cascades into the trashed table) don't
+    count, so a row first written there is still in its drop-time form: the first old_row."""
+    first, by = entries[0]
+    arrived = by == "pk" and (first["op"] == "INSERT" or _moves_pk(t, first))
+    form: tuple[int, str] | None = None if arrived else (first["id"], "old_row")
+    for a, by in entries:
+        if created.get(a["action_id"], dropped_at) < dropped_at:
+            gone = by == "old_row" or a["op"] == "DELETE"
+            form = None if gone else (a["id"], "new_row")
+    return form
 
 
 def _kept_rows(steps: list[RewindStep]) -> dict[str, set[str] | None]:
@@ -729,10 +789,12 @@ def _describe(
     tables: dict[int, Table],
     revert_ids: set[int],
     restore_cols: dict[int, list[str]],
+    aliases: dict[str, str],
 ) -> str:
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     for a in audit:
         name = tables[a["table_oid"]].name
+        name = aliases.get(name, name)
         if a["id"] in revert_ids:
             counts["Re-insert" if a["op"] == "DELETE" else "Delete"][name] += 1
         elif restore_cols.get(a["id"]):
