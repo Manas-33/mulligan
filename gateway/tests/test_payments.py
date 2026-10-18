@@ -241,3 +241,35 @@ async def test_failed_capture_is_retried_later() -> None:
 
 
 _ = Capture  # imported for type hints in helpers
+
+
+async def test_rewound_payment_is_never_captured() -> None:
+    """Live-run finding: after a rewind cancels the authorization, the capture timer skips it."""
+    stripe = FakeStripe()
+    adapter = PaymentsAdapter(stripe)
+    store, bus = MemStore(), MemBus()
+    hm = PhotonHoldManager(
+        HoldDeps(store=store, bus=bus, runner=AdapterRunner(store, adapter)),
+        PhotonNotifier("", "", ""),
+        payments=adapter,
+    )
+    from mulligan.models import Hold
+
+    _, inv = await run_adapter(adapter, "act_01M561R2302EME3JAF7RBZWM01")
+    action = executed("act_01M561R2302EME3JAF7RBZWM01", inv).model_copy(
+        update={
+            "hold": Hold(
+                kind=HoldKind.payment_auth,
+                release_at=utcnow() - timedelta(seconds=1),  # window already over
+                authorization_expires_at=AUTH_EXPIRES,
+                external_id="pi_BZWM01",
+            )
+        }
+    )
+    step = await adapter.revert(action)
+    assert step.result is StepResult.restored
+    await store.save(action.model_copy(update={"status": ActionStatus.reverted}))
+
+    assert await hm.release_due() == []
+    assert ("capture", "pi_BZWM01") not in stripe.calls
+    assert stripe.intents["pi_BZWM01"] == "canceled"
