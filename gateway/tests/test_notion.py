@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,7 +16,7 @@ from mulligan.adapters.notion.client import (
     NotionWriteUnknown,
     normalize_id,
 )
-from mulligan.interfaces import ToolCall, ToolResult
+from mulligan.interfaces import ToolCall, ToolResult, WriteUncertain
 from mulligan.models import (
     Action,
     ActionStatus,
@@ -336,6 +337,79 @@ async def test_a_failed_write_rolls_back_the_call(adapter: NotionAdapter, fake: 
     )
     assert result.is_error and "rolled back" in result.summary
     assert fake.page["properties"]["title"]["title"][0]["plain_text"] == "Acme Widgets — Pricing"
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The client's retry waits, skipped."""
+
+    async def sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("mulligan.adapters.notion.client.asyncio.sleep", sleep)
+
+
+async def test_a_write_whose_reply_is_lost_is_rolled_back_too(
+    adapter: NotionAdapter, fake: FakeNotion, no_sleep: None
+) -> None:
+    pro = fake.find("Pro: $99/month")
+
+    def lost_reply(request: httpx.Request) -> httpx.Response | None:
+        if request.method == "PATCH" and request.url.path.endswith(pro):
+            body = json.loads(request.content)
+            if "Pro: $1" in json.dumps(body):
+                fake.fail = None
+                fake.handle(request)  # Notion applies it; every reply is lost
+                fake.fail = lost_reply
+                raise httpx.ReadTimeout("timed out", request=request)
+        return None
+
+    fake.fail = lost_reply
+    result, _ = await Runner(adapter).call(
+        "notion_update_page",
+        {"page_id": fake.page_id, "block_updates": [{"block_id": pro, "text": "Pro: $1"}]},
+    )
+    fake.fail = None
+    assert result.is_error and "rolled back" in result.summary
+    assert fake.text(pro) == "Pro: $99/month"
+
+
+async def test_a_roll_back_that_fails_keeps_an_inverse_for_the_rewind(
+    adapter: NotionAdapter, fake: FakeNotion, no_sleep: None
+) -> None:
+    pro = fake.find("Pro: $99/month")
+
+    def fail(request: httpx.Request) -> httpx.Response | None:
+        if request.method == "PATCH" and request.url.path.endswith(pro):
+            return httpx.Response(400, json={"code": "validation_error", "message": "nope"})
+        if request.method == "PATCH" and "Changed" not in request.content.decode():
+            return httpx.Response(503, json={"code": "service_unavailable", "message": "down"})
+        return None
+
+    fake.fail = fail
+    args = {
+        "page_id": fake.page_id,
+        "properties": {"title": "Changed"},
+        "block_updates": [{"block_id": pro, "text": "Pro: $1"}],
+    }
+    call = ToolCall(
+        action_id="act_" + "0" * 26,
+        session_id="ses_" + "0" * 26,
+        agent=AGENT,
+        tool="notion_update_page",
+        system=System.notion,
+        args=args,
+    )
+    before = await adapter.capture_before(call)
+    with pytest.raises(WriteUncertain) as raised:
+        await adapter.execute(call, before)
+    fake.fail = None
+    assert "rolling back" in str(raised.value)
+    title_key = f"notion:{fake.page_id}/properties/title"
+    fields = raised.value.inverse.payload["fields"]
+    assert [f["key"] for f in fields] == [title_key]  # Notion refused the block update
+    assert set(raised.value.after_hashes) == {title_key}
+    assert fake.page["properties"]["title"]["title"][0]["plain_text"] == "Changed"
 
 
 async def test_editing_a_trashed_page_is_refused(adapter: NotionAdapter, fake: FakeNotion) -> None:

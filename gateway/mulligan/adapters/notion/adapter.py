@@ -313,38 +313,46 @@ class NotionAdapter(Adapter):
 
         fields: list[dict[str, Any]] = []
         hashes: dict[str, str] = {}
+        # The fields of the write in flight. Unless Notion refused it, it may have landed with
+        # its reply lost, so they are rolled back too (harmless if it never landed).
+        sending: list[dict[str, Any]] = []
         try:
             if req_props:
-                after = await self.client.update_page(page_id, properties=req_props)
                 for name in req_props:
-                    b, a = prop_form(props[name]), prop_form(after["properties"].get(name))
-                    key = f"notion:{page_id}/properties/{seg(name)}"
-                    fields.append(
+                    b = prop_form(props[name])
+                    sending.append(
                         {
-                            "key": key,
+                            "key": f"notion:{page_id}/properties/{seg(name)}",
                             "kind": "property",
                             "name": name,
                             "before": b,
                             "before_value": prop_value(b),
-                            "agent_value": prop_value(a),
+                            "agent_value": None,
                         }
                     )
-                    hashes[key] = form_hash(a)
+                after = await self.client.update_page(page_id, properties=req_props)
+                for f in sending:
+                    a = prop_form(after["properties"].get(f["name"]))
+                    f["agent_value"] = prop_value(a)
+                    hashes[f["key"]] = form_hash(a)
+                fields += sending
+                sending = []
             for block_id, payload in updates.items():
-                after = await self.client.update_block(block_id, **payload)
                 b = block_form(nodes[block_id])
-                key = f"notion:{page_id}/blocks/{block_id}"
-                fields.append(
-                    {
-                        "key": key,
-                        "kind": "block",
-                        "block_id": block_id,
-                        "before": b,
-                        "before_value": form_text(b),
-                        "agent_value": form_text(block_form(after)),
-                    }
-                )
-                hashes[key] = block_hash(after)
+                f = {
+                    "key": f"notion:{page_id}/blocks/{block_id}",
+                    "kind": "block",
+                    "block_id": block_id,
+                    "before": b,
+                    "before_value": form_text(b),
+                    "agent_value": None,
+                }
+                sending = [f]
+                after = await self.client.update_block(block_id, **payload)
+                f["agent_value"] = form_text(block_form(after))
+                hashes[f["key"]] = block_hash(after)
+                fields.append(f)
+                sending = []
             try:
                 appended = await self.client.append(page_id, appends) if appends else []
             except NotionWriteUnknown as exc:
@@ -376,7 +384,16 @@ class NotionAdapter(Adapter):
                 hashes[field["key"]] = block_hash(blk)
         except Errors as exc:
             # The call fails as a whole, and a failed action has no inverse: undo its writes now.
-            await self._roll_back(page_id, fields)
+            refused = isinstance(exc, NotionError) and 400 <= exc.status < 500
+            written = fields + ([] if refused else sending)
+            if await self._roll_back(page_id, written):
+                # Some writes may still be on the page: keep an inverse so a rewind checks them.
+                raise WriteUncertain(
+                    f"{exc} (rolling back this call's earlier changes failed)",
+                    before_ref=before.ref,
+                    inverse=self._inverse(call, before, written),
+                    after_hashes=hashes,
+                ) from exc
             raise ToolError(f"{exc} (this call's earlier changes were rolled back)") from exc
 
         before.state.update(fields=fields, after_hashes=hashes)
@@ -425,7 +442,9 @@ class NotionAdapter(Adapter):
         before.state["after_hashes"] = {key: trash_hash(bool(after.get("in_trash")))}
         return ToolResult(structured_content=content, summary=f'Moved "{title}" to the trash')
 
-    async def _roll_back(self, page_id: str, fields: list[dict[str, Any]]) -> None:
+    async def _roll_back(self, page_id: str, fields: list[dict[str, Any]]) -> list[str]:
+        """Put each field back; returns the keys that couldn't be."""
+        failed: list[str] = []
         for f in reversed(fields):
             try:
                 if f["kind"] == "property":
@@ -438,6 +457,8 @@ class NotionAdapter(Adapter):
                     await self.client.delete_block(f["block_id"])
             except Errors:
                 log.exception("rolling back %s failed", f["key"])
+                failed.append(f["key"])
+        return failed
 
     async def capture_after(self, call: ToolCall, before: Capture, result: ToolResult) -> Capture:
         return Capture(ref=before.ref, after_hashes=dict(before.state.get("after_hashes", {})))
