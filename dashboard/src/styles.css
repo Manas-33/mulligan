@@ -369,3 +369,87 @@ code.mono { font-size: 0.9em; color: var(--cream); }
   .rewind-to { align-items: flex-start; text-align: left; width: 100%; }
 }
 .back-to { color: var(--sun); }
+
+/* --- Nav brand as a link home, footer link --- */
+a.brand { color: inherit; text-decoration: none; }
+.foot { padding: 72px 24px 0; }
+.foot .link-button { font-size: 15px; }
+
+/* --- Evidence page: a yardage book, one hole per sponsor --- */
+.evidence { padding: 0 24px; }
+.evidence .hero { padding-left: 0; padding-right: 0; }
+.evidence a:not(.pill-button):not(.brand) { color: var(--cream); }
+.ext { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--sun); white-space: nowrap; }
+.holes { display: flex; flex-direction: column; gap: 4px; justify-self: end; }
+.holes a { display: grid; grid-template-columns: 26px 64px auto; align-items: center; gap: 10px; padding: 14px 6px; text-decoration: none; border-bottom: 1px dashed var(--rule); font-size: 22px; }
+.holes a:hover strong { text-decoration: underline; text-underline-offset: 4px; }
+.holes .mono { font-size: 13px; }
+
+.hole { padding: 40px 0 64px; border-top: 2px solid var(--cream); scroll-margin-top: 16px; }
+.hole-head { display: flex; align-items: center; gap: 22px; padding-bottom: 28px; }
+.hole-head h2 { font-weight: 800; font-size: clamp(28px, 3.2vw, 40px); letter-spacing: -0.025em; line-height: 1.1; }
+.hole-head .quiet { font: 13px var(--mono); padding-top: 4px; }
+/* The hole marker: a cream disc with the number punched in, tilted like a tee marker in the grass. */
+.hole-number {
+  display: grid; place-items: center; flex-shrink: 0; width: 64px; height: 64px; border-radius: 50%;
+  background: var(--cream); color: var(--ground); font-size: 30px; font-weight: 700;
+  border-bottom: 5px solid var(--cream-edge); transform: rotate(-6deg);
+}
+.hole-lede { padding-bottom: 32px; }
+.notes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 520px); gap: 48px; align-items: start; }
+.notes-title { font-weight: 800; font-size: 22px; letter-spacing: -0.02em; padding: 48px 0 12px; }
+
+.steps { display: flex; flex-direction: column; }
+.step { display: flex; gap: 18px; padding: 18px 0; border-bottom: 1px solid var(--rule); }
+.step-mark { flex-shrink: 0; width: 28px; color: var(--sun); font-size: 18px; font-weight: 700; }
+.step-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.step h3 { font-weight: 700; font-size: 19px; }
+.step .quiet { color: var(--body); }
+.step pre { margin: 10px 0; padding: 12px 0 12px 14px; border-left: 3px solid var(--berry); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; color: var(--cream); }
+.step pre.repro { border-left-color: var(--rule); line-height: 1.6; }
+
+.products { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 48px; }
+.product { padding: 16px 0 18px; border-bottom: 1px solid var(--rule); display: flex; flex-direction: column; gap: 6px; }
+.product strong { font-size: 18px; }
+.product .quiet { color: var(--body); font-size: 15px; }
+
+.thread-wrap { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 56px; }
+/* A dashed path down the left, like a cart path between beats. */
+.thread { display: flex; flex-direction: column; gap: 14px; padding-left: 20px; border-left: 2px dashed rgba(243, 234, 211, 0.18); }
+.beat { display: flex; gap: 14px; align-items: flex-start; }
+.beat .object { flex-shrink: 0; margin-top: 2px; }
+.beat .quiet { color: var(--body); font-size: 15px; }
+.text { display: flex; flex-direction: column; gap: 4px; max-width: 420px; }
+.text .bubble { white-space: pre-line; }
+.text-you { align-self: flex-end; align-items: flex-end; }
+.bubble-you { background: var(--sky); color: var(--ground); font-weight: 600; border-radius: 22px 22px 6px 22px; }
+
+.carried { display: flex; align-items: center; gap: 28px; padding-bottom: 28px; }
+.carried-objects { display: flex; gap: 10px; flex-shrink: 0; }
+.carried .quiet { color: var(--body); max-width: 560px; }
+
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; padding-top: 28px; }
+.notes .shots, .trace-shot .shots { padding-top: 18px; grid-template-columns: minmax(0, 1fr); }
+.trace-shot { max-width: 760px; }
+.shot { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.shot img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--card-line); }
+.shot-slot {
+  display: flex; flex-direction: column; justify-content: center; gap: 6px; aspect-ratio: 16 / 10; padding: 18px;
+  border: 2px dashed rgba(243, 234, 211, 0.22); border-radius: 10px; overflow-wrap: anywhere;
+}
+.sign-off { display: flex; align-items: center; gap: 10px; padding-top: 48px; }
+
+@media (max-width: 1100px) {
+  .notes, .thread-wrap { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .holes { justify-self: start; }
+}
+@media (max-width: 640px) {
+  .evidence, .foot { padding-left: 0; padding-right: 0; }
+  .hole-head { gap: 16px; }
+  .hole-number { width: 48px; height: 48px; font-size: 22px; }
+  .hole-head h2 { font-size: 26px; }
+  .products { grid-template-columns: minmax(0, 1fr); }
+  .carried { flex-direction: column; align-items: flex-start; }
+  .carried-objects .object { width: 36px; height: auto; }
+  .thread { padding-left: 14px; }
+}

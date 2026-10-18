@@ -1,7 +1,7 @@
 // The Mulligan dashboard: one agent session ("round") at a time. The round screen shows what the
 // agent did and what's held; the rewind screens show the plan, the live run and the proof.
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { createClient } from "./api/client.ts";
 import { streamEvents } from "./api/sse.ts";
 import { Course } from "./components/Course.tsx";
@@ -15,6 +15,24 @@ import { GatewayProblem, Loading, NoRounds } from "./components/States.tsx";
 import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
 import type { Action, RewindJob } from "./types.ts";
 import { describeProblem, type Problem, shortId, UNDOABLE } from "./view.ts";
+
+// The sponsor-evidence page is its own chunk: judges open it, the demo doesn't need it.
+const Evidence = lazy(() => import("./components/Evidence.tsx"));
+
+/** "#/evidence" shows the evidence page; anything else is the dashboard. */
+function useRoute(): "evidence" | "dashboard" {
+  const read = (): "evidence" | "dashboard" => (location.hash.startsWith("#/evidence") ? "evidence" : "dashboard");
+  const [route, setRoute] = useState(read);
+  useEffect(() => {
+    const on = () => {
+      setRoute(read());
+      scrollTo(0, 0);
+    };
+    addEventListener("hashchange", on);
+    return () => removeEventListener("hashchange", on);
+  }, []);
+  return route;
+}
 
 const client = createClient({ baseUrl: API_URL, token: DASHBOARD_TOKEN });
 
@@ -38,6 +56,7 @@ const CONN_TEXT: Partial<Record<Conn, string>> = {
 
 export function App() {
   if (import.meta.env.DEV && location.hash === "#crash") throw new Error("crash test (#crash, dev only)");
+  const route = useRoute();
   const [state, dispatch] = useReducer(reduce, empty);
   const [conn, setConn] = useState<Conn>("connecting");
   const [load, setLoad] = useState<Load>({ state: "loading" });
@@ -113,10 +132,10 @@ export function App() {
   return (
     <div className="app">
       <nav className="nav" aria-label="Mulligan">
-        <span className="brand">
+        <a className="brand" href="#/">
           <Logo /> Mulligan
-        </span>
-        {sessions.length > 1 && (
+        </a>
+        {route === "dashboard" && sessions.length > 1 && (
           <label className="round-picker">
             <span className="quiet">round</span>
             <select
@@ -140,41 +159,54 @@ export function App() {
         </span>
       </nav>
 
-      {load.state === "ready" && conn === "unauthorized" && (
-        <p role="alert" className="notice notice-bad">
-          The live feed refused the dashboard’s token, so nothing new will show up. Check <code className="mono">MULLIGAN_DASHBOARD_TOKEN</code>.
-        </p>
-      )}
-      {load.state === "ready" && feedLost && lostAt !== null && (
-        <p role="status" className="notice">
-          Lost the live feed at <span className="mono">{clock(lostAt)}</span>. What’s here may be out of date; reconnecting every
-          couple of seconds.
-        </p>
-      )}
-
-      {load.state === "loading" ? (
-        <Loading />
-      ) : load.state === "failed" && !session ? (
-        <GatewayProblem problem={load.problem} apiUrl={API_URL} onRetry={() => void fetchSnapshot()} retrying={retrying} />
-      ) : !session ? (
-        <NoRounds />
-      ) : rewinding ? (
-        <Rewind
-          client={client}
-          session={session}
-          actions={state.actions}
-          from={rewinding.from}
-          live={latestRewind(state, session.id)}
-          onJob={onJob}
-          onClose={() => setRewinding(null)}
-        />
+      {route === "evidence" ? (
+        <Suspense fallback={<Loading />}>
+          <Evidence />
+        </Suspense>
       ) : (
         <>
-          <Hero session={session} actions={actions} canRewind={canRewind} onRewind={() => setRewinding({})} />
-          <div className="body">
-            <Course session={session} actions={actions} onRewindTo={(from) => setRewinding({ from })} />
-            <Holds client={client} held={held} />
-          </div>
+          {load.state === "ready" && conn === "unauthorized" && (
+            <p role="alert" className="notice notice-bad">
+              The live feed refused the dashboard’s token, so nothing new will show up. Check <code className="mono">MULLIGAN_DASHBOARD_TOKEN</code>.
+            </p>
+          )}
+          {load.state === "ready" && feedLost && lostAt !== null && (
+            <p role="status" className="notice">
+              Lost the live feed at <span className="mono">{clock(lostAt)}</span>. What’s here may be out of date; reconnecting every
+              couple of seconds.
+            </p>
+          )}
+
+          {load.state === "loading" ? (
+            <Loading />
+          ) : load.state === "failed" && !session ? (
+            <GatewayProblem problem={load.problem} apiUrl={API_URL} onRetry={() => void fetchSnapshot()} retrying={retrying} />
+          ) : !session ? (
+            <NoRounds />
+          ) : rewinding ? (
+            <Rewind
+              client={client}
+              session={session}
+              actions={state.actions}
+              from={rewinding.from}
+              live={latestRewind(state, session.id)}
+              onJob={onJob}
+              onClose={() => setRewinding(null)}
+            />
+          ) : (
+            <>
+              <Hero session={session} actions={actions} canRewind={canRewind} onRewind={() => setRewinding({})} />
+              <div className="body">
+                <Course session={session} actions={actions} onRewindTo={(from) => setRewinding({ from })} />
+                <Holds client={client} held={held} />
+              </div>
+            </>
+          )}
+          <footer className="foot">
+            <a className="link-button quiet" href="#/evidence">
+              How Mulligan was built →
+            </a>
+          </footer>
         </>
       )}
     </div>
