@@ -8,4 +8,7 @@ export type {
   NotifyApprovalRequest,
   NotifyResponse,
   NotifySummaryRequest,
+  RewindJob,
+  RewindStep,
+  System,
 } from "../../contracts/generated/types.ts";

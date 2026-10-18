@@ -1,11 +1,13 @@
 // The gateway REST calls the service makes (contracts/openapi.yaml), with the service token.
 
-import type { Action, ApprovalDecisionRequest } from "./types.ts";
+import type { Action, ApprovalDecisionRequest, RewindJob } from "./types.ts";
 
 export interface Gateway {
   heldActions(): Promise<Action[]>;
   /** Returns the action after the decision, or throws GatewayError (404 / 409 not held / 422 wrong code). */
   decide(actionId: string, body: ApprovalDecisionRequest): Promise<Action>;
+  /** The newest rewind jobs, newest first (dry runs included). */
+  rewinds(limit?: number): Promise<RewindJob[]>;
 }
 
 export class GatewayError extends Error {
@@ -31,5 +33,6 @@ export function httpGateway(baseUrl: string, serviceToken: string, doFetch: type
     heldActions: () => call<Action[]>("/api/actions?status=held"),
     decide: (actionId, body) =>
       call<Action>(`/api/approvals/${encodeURIComponent(actionId)}/decision`, { method: "POST", body: JSON.stringify(body) }),
+    rewinds: (limit = 20) => call<RewindJob[]>(`/api/rewind?limit=${limit}`),
   };
 }
