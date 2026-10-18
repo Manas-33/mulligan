@@ -1,4 +1,4 @@
-// "Held at the tee": actions waiting on a person, with why they were held and the code to text back.
+// "Needs your approval": actions held for a person, with why they were held and the code to text back.
 
 import { useEffect, useState } from "react";
 import { ApiError, type Client } from "../api/client.ts";
@@ -29,8 +29,8 @@ export function Holds({ client, held }: { client: Client; held: Action[] }) {
   return (
     <section className="holds" aria-labelledby="holds-title">
       <header className="section-head ruled">
-        <h2 id="holds-title">Held at the tee</h2>
-        <span className={held.length ? "berry" : "quiet"}>{held.length ? `${held.length} need you` : "all clear"}</span>
+        <h2 id="holds-title">Needs your approval</h2>
+        <span className={held.length ? "berry" : "quiet"}>{held.length ? `${held.length} waiting` : "all clear"}</span>
       </header>
       {held.length === 0 ? (
         <p className="quiet empty">Nothing is waiting. Anything that can't be undone stops here first.</p>
@@ -75,10 +75,10 @@ function Hold({ client, action, now }: { client: Client; action: Action; now: nu
         <p className="quiet">{whyHeld(action)}</p>
         <div className="hold-actions">
           <button className="pill-button small" disabled={busy !== null} onClick={() => decide("approve")}>
-            {busy === "approve" ? "Letting it through…" : "Let it through"}
+            {busy === "approve" ? "Approving…" : "Approve"}
           </button>
           <button className="link-button" disabled={busy !== null} onClick={() => decide("reject")}>
-            {busy === "reject" ? "Refusing…" : "Refuse"}
+            {busy === "reject" ? "Rejecting…" : "Reject"}
           </button>
           {action.approval && (
             <span className="code" title="Text this code back to approve from your phone">

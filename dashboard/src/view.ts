@@ -22,7 +22,7 @@ export function planCounts(job: RewindJob, actions: Record<string, Action>): Pla
   return counts;
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The one-sentence summary at the top of the plan. */
 export function planSentence(c: PlanCounts): string {
@@ -75,16 +75,53 @@ export function countBySystem(actions: Action[]): Partial<Record<System, number>
   return out;
 }
 
-/** What a lane says under its name: "15 writes", "40 closed", "1 held". */
+/** A read changed nothing, so a rewind has nothing to undo for it. */
+export const isRead = (a: Action) => a.reversibility.label === "read_only";
+
+/** Held actions a person or an undo turned down, so they never ran. */
+const refused = (a: Action) => a.status === "rejected" || a.status === "expired";
+
+/** What a lane says under its name: "15 writes · 6 reads", "40 changes", "1 held", "1 refused". */
 export function laneCaption(system: System, actions: Action[]): string {
-  const held = actions.filter((a) => a.status === "held").length;
-  const done = actions.length - held;
+  const reads = actions.filter(isRead).length;
+  const held = actions.filter((a) => !isRead(a) && a.status === "held").length;
+  const no = actions.filter((a) => !isRead(a) && refused(a)).length;
+  const done = actions.length - reads - held - no;
   const verb: Partial<Record<System, string>> = { postgres: "write", github: "change", notion: "page", email: "email", payments: "charge" };
   const parts = [];
   if (done) parts.push(plural(done, verb[system] ?? "call"));
+  if (reads) parts.push(plural(reads, "read"));
   if (held) parts.push(`${held} held`);
+  if (no) parts.push(`${no} refused`);
   return parts.join(" · ");
 }
+
+/**
+ * Reads and changes in a session. A change is anything that isn't a read, held ones included. `left`
+ * is the changes an undo can still do something about; `undone` the ones it already took back;
+ * `refused` the held ones that never ran.
+ */
+export function actionCounts(actions: Action[]): { reads: number; changes: number; left: number; undone: number; refused: number } {
+  const changes = actions.filter((a) => !isRead(a));
+  return {
+    reads: actions.length - changes.length,
+    changes: changes.length,
+    left: changes.filter(isUndoable).length,
+    undone: changes.filter((a) => a.status === "reverted" || a.status === "conflict").length,
+    refused: changes.filter(refused).length,
+  };
+}
+
+const LABEL_TEXT: Record<Action["reversibility"]["label"], string> = {
+  read_only: "read only",
+  reversible: "can be undone",
+  reversible_noisy: "can be undone, leaves a trace",
+  compensable: "can be offset, not undone",
+  irreversible: "can't be undone",
+};
+
+/** The reversibility label in plain words, for the timeline's selected action. */
+export const labelText = (label: Action["reversibility"]["label"]) => LABEL_TEXT[label] ?? label;
 
 /** 0..1 position of `at` between `start` and `end`; a zero-length span puts everything at the end. */
 export function position(at: string, start: string, end: string): number {

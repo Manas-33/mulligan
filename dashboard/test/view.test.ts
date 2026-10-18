@@ -9,6 +9,8 @@ import {
   planSentence,
   position,
   rewindSummary,
+  actionCounts,
+  labelText,
   showValue,
   stepKind,
   timeLeft,
@@ -38,6 +40,8 @@ const action = (over: Partial<Action>) =>
     reversibility: { label: "reversible", source: "policy", reason: null },
     ...over,
   }) as Action;
+
+const read = (over: Partial<Action>) => action({ reversibility: { label: "read_only", source: "policy", reason: null }, ...over });
 
 const job = (steps: RewindStep[], verification: RewindJob["verification"] = {}) =>
   ({ id: "rwd_1", status: "completed", steps, verification }) as unknown as RewindJob;
@@ -115,6 +119,11 @@ describe("formatting", () => {
     expect(laneCaption("postgres", [action({}), action({}), action({ status: "held" })])).toBe("2 writes · 1 held");
     expect(laneCaption("email", [action({ status: "held" })])).toBe("1 held");
   });
+  it("counts reads apart from the writes", () => {
+    expect(laneCaption("postgres", [action({}), read({}), read({}), action({ status: "held" })])).toBe("1 write · 2 reads · 1 held");
+    expect(laneCaption("mulligan", [read({})])).toBe("1 read");
+    expect(laneCaption("email", [action({ status: "rejected" })])).toBe("1 refused");
+  });
 });
 
 describe("undoableFrom", () => {
@@ -137,6 +146,36 @@ describe("undoableFrom", () => {
     expect(isUndoable(kept)).toBe(false);
     expect(isUndoable(action({ id: "w", status: "executed" }))).toBe(true);
     expect(undoableFrom([read, kept], "2000-01-01T00:00:00Z")).toEqual([]);
+  });
+});
+
+describe("undoableFrom and reads", () => {
+  it("never takes back a read: it changed nothing", () => {
+    const list = [read({ id: "r1", created_at: "2026-10-17T23:04:20Z" }), action({ id: "a1", created_at: "2026-10-17T23:04:10Z" })];
+    expect(undoableFrom(list, "2026-10-17T23:04:00Z").map((a) => a.id)).toEqual(["a1"]);
+    expect(undoableFrom(list, "2026-10-17T23:04:15Z")).toEqual([]);
+  });
+});
+
+describe("actionCounts", () => {
+  it("splits reads from changes, counting held ones as changes", () => {
+    const list = [read({}), read({}), read({}), action({}), action({ status: "held" })];
+    expect(actionCounts(list)).toEqual({ reads: 3, changes: 2, left: 2, undone: 0, refused: 0 });
+  });
+  it("counts what an undo took back and leaves the reads alone", () => {
+    const list = [read({}), action({ status: "reverted" }), action({ status: "conflict" }), action({ status: "rejected" })];
+    expect(actionCounts(list)).toEqual({ reads: 1, changes: 3, left: 0, undone: 2, refused: 1 });
+  });
+  it("handles a session of only reads", () => {
+    expect(actionCounts([read({}), read({})])).toEqual({ reads: 2, changes: 0, left: 0, undone: 0, refused: 0 });
+  });
+});
+
+describe("labelText", () => {
+  it("says the reversibility label in plain words", () => {
+    expect(labelText("read_only")).toBe("read only");
+    expect(labelText("compensable")).toBe("can be offset, not undone");
+    expect(labelText("irreversible")).toBe("can't be undone");
   });
 });
 

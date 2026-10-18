@@ -13,9 +13,9 @@ export function Loading() {
   return (
     <section className="hero state" aria-busy="true">
       <div className="hero-text">
-        <p className="meta">connecting to the gateway</p>
+        <p className="meta">loading</p>
         <h1 className="headline">
-          <span className="line">Walking out to the course…</span>
+          <span className="line">Connecting to the gateway…</span>
         </h1>
       </div>
     </section>
@@ -23,17 +23,17 @@ export function Loading() {
 }
 
 /** The gateway answered, and there are no sessions. */
-export function NoRounds() {
+export function NoSessions() {
   return (
     <section className="hero state" aria-labelledby="state-title">
       <div className="hero-text">
-        <p className="meta">0 rounds</p>
+        <p className="meta">0 sessions</p>
         <h1 id="state-title" className="headline">
-          <span className="line">No rounds yet.</span>
+          <span className="line">No sessions yet.</span>
         </h1>
         <p className="lede">
-          The course is set up and nobody has teed off. When an agent connects through Mulligan, its session shows up here
-          and every call it makes lands on the timeline.
+          When an AI agent connects through Mulligan, its session shows up here and every call it makes lands on the
+          timeline, ready to undo.
         </p>
       </div>
       <div className="tee-up" aria-hidden>
@@ -56,7 +56,7 @@ export function GatewayProblem({ problem, apiUrl, onRetry, retrying }: { problem
           {apiUrl} · {problem.status ? `HTTP ${problem.status}` : "no answer"}
         </p>
         <h1 id="state-title" className="headline">
-          <span className="line">{problem.kind === "unauthorized" ? "Wrong locker key." : lost ? "Can’t find the course." : "The gateway said no."}</span>
+          <span className="line">{problem.kind === "unauthorized" ? "The gateway refused the token." : lost ? "Can’t reach the gateway." : "The gateway said no."}</span>
         </h1>
         <p className="lede">
           {problem.kind === "unauthorized" ? (
@@ -101,13 +101,10 @@ export function Crashed({ eventId, onReset }: { eventId?: string; onReset: () =>
         <div className="hero-text">
           <p className="meta">dashboard error{eventId && <> · sentry event {eventId.slice(0, 12)}</>}</p>
           <h1 id="crash-title" className="headline">
-            <span className="line">Out of bounds.</span>
-            <span className="line">
-              Take a <span className="sticker sticker-sun">drop.</span>
-            </span>
+            <span className="line">The dashboard crashed.</span>
           </h1>
           <p className="lede">
-            The dashboard hit a bug and stopped drawing. Nothing in your systems changed because of it, and a rewind that was
+            The dashboard hit a bug and stopped drawing. Nothing in your systems changed because of it, and an undo that was
             already running keeps going on the gateway.
           </p>
           <div className="hero-actions">
