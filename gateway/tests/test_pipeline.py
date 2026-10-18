@@ -451,3 +451,32 @@ async def test_a_rewind_during_an_approval_waits_and_undoes_the_call(
     assert fake(svc).rows[2]["price"] == 99
     after = await svc.store.get(action.id)
     assert after is not None and after.status is ActionStatus.reverted
+
+
+async def test_a_call_not_yet_at_its_lock_is_waited_for_too(
+    svc: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 1}]
+    gate = asyncio.Event()
+    bump = svc.gateway._bump_session
+
+    async def slow_bump(session_id: str) -> None:
+        await gate.wait()  # logged as pending, not yet waiting for the Postgres lock
+        await bump(session_id)
+
+    monkeypatch.setattr(svc.gateway, "_bump_session", slow_bump)
+    running = asyncio.create_task(
+        svc.gateway.call_tool(session, "pg_update_rows", {"filter": flt, "values": {"price": 7}})
+    )
+    await asyncio.sleep(0.05)
+    job = await svc.rewinder.create(
+        RewindRequest(scope=RewindScope(session_id=session.id), dry_run=False)
+    )
+    await asyncio.sleep(0.05)
+    gate.set()
+    await running
+    await svc.rewinder.wait()
+    done = await svc.store.get_job(job.id)
+    assert done is not None and [s.result for s in done.steps] == [StepResult.restored]
+    assert fake(svc).rows[1]["price"] == 49

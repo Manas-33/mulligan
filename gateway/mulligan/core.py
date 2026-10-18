@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -49,6 +50,7 @@ def utcnow() -> datetime:
 _SECRET_KEY = re.compile(r"token|secret|passw|api[_-]?key|authorization|cookie|credential", re.I)
 _PLURALS = {"to": "recipients", "cc": "recipients", "bcc": "recipients", "rows": "rows"}
 MAX_STRING = 500
+IN_FLIGHT_WAIT_S = 300.0
 MAX_ITEMS = 50
 
 
@@ -118,9 +120,27 @@ class Gateway:
         self.upstream: dict[str, UpstreamToolSchema] = {}
         self.hold_manager: HoldManager | None = None
         self._locks: dict[System, asyncio.Lock] = {}
+        # Calls between being logged and settling (executed, failed or held), for the rewind.
+        self._in_flight: dict[str, asyncio.Event] = {}
 
     def lock_for(self, system: System) -> asyncio.Lock:
         return self._locks.setdefault(system, asyncio.Lock())
+
+    async def settled(self, action_id: str, timeout_s: float = IN_FLIGHT_WAIT_S) -> None:
+        """Wait (up to `timeout_s`) for a call this process is still running to settle."""
+        done = self._in_flight.get(action_id)
+        if done is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(done.wait(), timeout_s)
+
+    @contextlib.contextmanager
+    def _running(self, action_id: str) -> Iterator[None]:
+        done = self._in_flight[action_id] = asyncio.Event()
+        try:
+            yield
+        finally:
+            self._in_flight.pop(action_id, None)
+            done.set()
 
     @property
     def builtin_tools(self) -> frozenset[str]:
@@ -182,10 +202,23 @@ class Gateway:
     # --- the pipeline -----------------------------------------------------------------------
 
     async def call_tool(self, session: Session, tool: str, args: dict[str, Any]) -> ToolResult:
-        system, reversibility, held, hold_kind = self.classify(tool)
+        classified = self.classify(tool)
+        action_id = new_id("act")
+        with self._running(action_id):
+            return await self._call_tool(session, tool, args, action_id, classified)
+
+    async def _call_tool(
+        self,
+        session: Session,
+        tool: str,
+        args: dict[str, Any],
+        action_id: str,
+        classified: tuple[System, Reversibility, bool, Any],
+    ) -> ToolResult:
+        system, reversibility, held, hold_kind = classified
         upstream_server = self.upstream[tool].server if system is System.upstream else None
         action = Action(
-            id=new_id("act"),
+            id=action_id,
             session_id=session.id,
             agent=session.agent,
             system=system,
@@ -246,7 +279,12 @@ class Gateway:
             return latest
         if args is None:
             raise LookupError(f"no stored arguments for {action_id}")
-        action = latest
+        with self._running(action_id):
+            return await self._run_held(latest, args, session)
+
+    async def _run_held(
+        self, action: Action, args: dict[str, Any], session: Session | None
+    ) -> Action:
         call = ToolCall(
             action_id=action.id,
             session_id=action.session_id,

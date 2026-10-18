@@ -282,10 +282,13 @@ class Rewinder:
     async def _revert_one(self, action: Action) -> tuple[RewindStep, Action]:
         current = await self.store.get(action.id) or action
         adapter = self.gateway.by_system.get(current.system)
-        if current.status in _IN_FLIGHT and adapter is not None:
-            # The call holds (or waits for) its system's lock until its outcome is saved.
-            async with self.gateway.lock_for(adapter.system):
-                pass
+        if current.status in _IN_FLIGHT:
+            # Still running when the rewind was planned: wait until its outcome is saved (and,
+            # for an approved payment, until its hold is recorded).
+            await self.gateway.settled(current.id)
+            hold_settled = getattr(self.gateway.hold_manager, "settled", None)
+            if hold_settled is not None:
+                await hold_settled(current.id)
             current = await self.store.get(action.id) or current
         if current.status in (ActionStatus.held, ActionStatus.approved):
             hold_manager = self.gateway.hold_manager

@@ -296,12 +296,16 @@ class PhotonHoldManager(HoldManager):
 
     # --- rewind before it ran -------------------------------------------------------------------
 
-    async def cancel(self, action: Action) -> RewindStep:
-        running = self._running.get(action.id)
+    async def settled(self, action_id: str) -> None:
+        """Wait for an approved call's run (and its payment hold record) to finish."""
+        running = self._running.get(action_id)
         if running is not None:
-            # Approved and running now: too late to stop. Wait for it, so the rewind sees it
-            # executed and undoes it (refund, correction email) like any other call.
             await running.wait()
+
+    async def cancel(self, action: Action) -> RewindStep:
+        # Approved and running now: too late to stop. Wait for it, so the rewind sees it
+        # executed and undoes it (refund, correction email) like any other call.
+        await self.settled(action.id)
         async with self._lock:
             current = await self.deps.store.get(action.id) or action
             # Approved but not running (the gateway stopped mid-approval): the core's run_held
