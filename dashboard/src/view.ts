@@ -106,7 +106,7 @@ export function actionCounts(actions: Action[]): { reads: number; changes: numbe
   return {
     reads: actions.length - changes.length,
     changes: changes.length,
-    left: changes.filter(undoable).length,
+    left: changes.filter(isUndoable).length,
     undone: changes.filter((a) => a.status === "reverted" || a.status === "conflict").length,
     refused: changes.filter(refused).length,
   };
@@ -181,15 +181,17 @@ export function fieldLabel(field: string): string {
 
 export const shortId = (id: string) => id.replace(/^[a-z]+_/, "").slice(-4).toLowerCase();
 
-/** Statuses a rewind can still do something about (undo it, or refuse it while held). */
-export const UNDOABLE = new Set<Action["status"]>(["executed", "held", "approved", "conflict"]);
+/** Statuses a rewind can still do something about (undo it, or refuse it while held). Mirrors the
+ * gateway's `Rewinder.select` (orchestrator/rewind.py), so the dashboard never promises a step the
+ * plan then leaves out. `conflict` is not here: its revert already ran and kept a human edit. */
+export const UNDOABLE = new Set<Action["status"]>(["executed", "held", "approved"]);
 
-/** Whether a rewind can still do something about this action. Reads never need one. */
-export const undoable = (a: Action) => !isRead(a) && UNDOABLE.has(a.status);
+/** Whether a rewind would pick this action up: an undoable status, and it changed something. */
+export const isUndoable = (a: Action): boolean => UNDOABLE.has(a.status) && a.reversibility.label !== "read_only";
 
 /** Undoable actions created at or after `since`: what "Rewind to here" would take back. */
 export const undoableFrom = (actions: Action[], since: string): Action[] =>
-  actions.filter((a) => undoable(a) && Date.parse(a.created_at) >= Date.parse(since));
+  actions.filter((a) => isUndoable(a) && Date.parse(a.created_at) >= Date.parse(since));
 
 /** Why a gateway call failed, sorted into what the screens can say something useful about. */
 export type Problem = { kind: "unauthorized" | "unreachable" | "gateway"; status?: number; detail: string };
