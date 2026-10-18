@@ -6,7 +6,13 @@ import { notifyApproval, notifySummary, type Reply } from "./notify.ts";
 import type { Messenger } from "./photon.ts";
 import type { ErrorResponse } from "./types.ts";
 
-export type AppOptions = { serviceToken: string; messenger: Messenger; log?: (line: string) => void };
+export type AppOptions = {
+  serviceToken: string;
+  messenger: Messenger;
+  log?: (line: string) => void;
+  /** Unexpected route failures (the 502s), for Sentry. */
+  onError?: (error: unknown, path: string) => void;
+};
 
 const MAX_BODY = 16 * 1024;
 
@@ -55,7 +61,7 @@ const ROUTES: Record<string, (m: Messenger, body: unknown) => Promise<Reply>> = 
   "/notify/summary": notifySummary,
 };
 
-export function createApp({ serviceToken, messenger, log = console.error }: AppOptions): Server {
+export function createApp({ serviceToken, messenger, log = console.error, onError = () => {} }: AppOptions): Server {
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
 
@@ -78,6 +84,7 @@ export function createApp({ serviceToken, messenger, log = console.error }: AppO
     } catch (e) {
       if (e instanceof BodyError) return error(res, e.status, e.message);
       log(`${path} failed: ${e instanceof Error ? e.message : String(e)}`);
+      onError(e, path);
       return error(res, 502, "Photon request failed");
     }
   });

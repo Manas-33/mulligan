@@ -17,6 +17,9 @@ export function readDotenv(path: string): Record<string, string> {
 
 const ROOT_ENV = new URL("../../.env", import.meta.url).pathname;
 
+/** The repo-root .env with the process environment on top. */
+export const loadEnv = (): NodeJS.ProcessEnv => ({ ...readDotenv(ROOT_ENV), ...process.env });
+
 export type Config = {
   port: number;
   host: string;
@@ -27,7 +30,7 @@ export type Config = {
   approverHandle: string;
 };
 
-export function loadConfig(env: NodeJS.ProcessEnv = { ...readDotenv(ROOT_ENV), ...process.env }): Config {
+export function loadConfig(env: NodeJS.ProcessEnv = loadEnv()): Config {
   const required = (name: string): string => {
     const value = env[name]?.trim();
     if (!value) throw new Error(`${name} is not set`);
