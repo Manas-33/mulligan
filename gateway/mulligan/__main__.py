@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import sentry_sdk
 import uvicorn
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 from mulligan.adapters.github.adapter import GitHubAdapter
 from mulligan.adapters.notion.adapter import NotionAdapter
@@ -77,13 +79,25 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = Settings.from_env()
     if settings.sentry_dsn:
-        sentry_sdk.init(
-            dsn=settings.sentry_dsn,
-            environment=settings.sentry_environment,
-            traces_sample_rate=1.0,
-            send_default_pii=False,
-        )
+        sentry_sdk.init(**sentry_options(settings))
     asyncio.run(serve(settings))
+
+
+def sentry_options(settings: Settings) -> dict[str, Any]:
+    """Tracing for every action and rewind, plus Sentry Logs: the gateway's stdlib logging at
+    INFO and above goes to Sentry as logs (errors still become events)."""
+    return {
+        "dsn": settings.sentry_dsn,
+        "environment": settings.sentry_environment,
+        "traces_sample_rate": 1.0,
+        "send_default_pii": False,
+        "enable_logs": True,
+        "integrations": [
+            LoggingIntegration(
+                level=logging.INFO, event_level=logging.ERROR, sentry_logs_level=logging.INFO
+            )
+        ],
+    }
 
 
 if __name__ == "__main__":
