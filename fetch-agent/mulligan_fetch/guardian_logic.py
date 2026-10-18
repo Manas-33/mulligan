@@ -1,8 +1,10 @@
 """What the Guardian decides, separate from the uAgents runtime so it can be tested directly.
 
 Chat in ASI:One:
-  any task text       -> the worker runs it through Mulligan; the Guardian reports what ran and
-                         what's held, with a card to rewind the session and one per held action
+  a cleanup task      -> the worker runs it through Mulligan; the Guardian reports what ran and
+                         what's held, with a card to rewind the session and one per held action.
+                         A task needs explicit intent ("do the quarter-end cleanup", "task: ...");
+                         anything else gets the help reply, so "thanks" never runs it
   "rewind" / card     -> rewind the user's last protected session and report the result
   "approve 4821"      -> approve (or "reject 4821") a held action from that session
   "status", "help"
@@ -20,9 +22,11 @@ from mulligan_fetch.mulligan_api import MulliganAPI, MulliganError
 
 MENTION = re.compile(r"@agent1[0-9a-z]+")
 CODE = re.compile(r"\b(\d{4})\b")
+TASK_WORDS = ("cleanup", "clean up", "quarter-end")
+TASK_PREFIXES = ("task:", "run ")
 
 HELP = (
-    'I\'m Mulligan Guardian. Give me a task (for example "do the quarter-end cleanup") and my '
+    'I\'m Mulligan Guardian. To start a task, say "do the quarter-end cleanup" and my '
     "worker runs it through Mulligan, which records every change and holds anything that can't "
     'be undone. Then say "rewind" to undo the whole session, "approve 1234" or '
     '"reject 1234" for a held action, or "status".'
@@ -71,7 +75,9 @@ def parse(raw: str) -> Command:
     first = lowered.split()[0]
     if first in {"approve", "reject"} and (match := CODE.search(lowered)):
         return Command(first, code=match.group(1))
-    return Command("task", text=text)
+    if lowered.startswith(TASK_PREFIXES) or any(w in lowered for w in TASK_WORDS):
+        return Command("task", text=text)
+    return Command("help")
 
 
 def card(kind: str, payload: dict[str, Any]) -> dict[str, str]:

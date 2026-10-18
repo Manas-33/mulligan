@@ -58,6 +58,9 @@ export function reduce(state: State, msg: Msg): State {
       return { ...next, rewinds: { ...state.rewinds, [e.data.id]: e.data } };
     case "checksum.verified":
       return { ...next, checks: [...state.checks.slice(-49), e.data] };
+    case "demo.reset":
+      // The log was wiped; the caller loads the snapshot again.
+      return { ...empty, lastSeq: e.seq };
     default:
       return { ...next, actions: { ...state.actions, [e.data.id]: e.data } };
   }
@@ -65,6 +68,10 @@ export function reduce(state: State, msg: Msg): State {
 
 /** Sessions newest first. */
 export const sessionList = (s: State) => Object.values(s.sessions).sort((a, b) => b.started_at.localeCompare(a.started_at));
+
+/** The selected session while it exists, else the newest (a demo reset removes them all). */
+export const currentSession = (s: State, selected: string | null): string | null =>
+  (selected !== null && selected in s.sessions ? selected : sessionList(s)[0]?.id) ?? null;
 
 /** A session's actions newest first; ids are ULIDs, so they sort by creation time. */
 export const timeline = (s: State, sessionId: string) =>

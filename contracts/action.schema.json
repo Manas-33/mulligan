@@ -921,7 +921,8 @@
         "rewind.failed",
         "checksum.verified",
         "hold.released",
-        "hold.expired"
+        "hold.expired",
+        "demo.reset"
       ]
     },
     "SessionEventName": {
@@ -964,6 +965,12 @@
       "type": "string",
       "enum": [
         "checksum.verified"
+      ]
+    },
+    "DemoResetEventName": {
+      "type": "string",
+      "enum": [
+        "demo.reset"
       ]
     },
     "SessionEvent": {
@@ -1153,6 +1160,32 @@
         }
       }
     },
+    "DemoResetEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "seq",
+        "ts",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/DemoResetEventName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "$ref": "#/$defs/DemoResetResult"
+        }
+      }
+    },
     "MulliganEvent": {
       "description": "Envelope of every SSE and internal-bus event. Narrow on `event`.",
       "oneOf": [
@@ -1170,6 +1203,9 @@
         },
         {
           "$ref": "#/$defs/ChecksumEvent"
+        },
+        {
+          "$ref": "#/$defs/DemoResetEvent"
         }
       ]
     },

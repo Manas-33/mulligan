@@ -38,6 +38,9 @@ _UNDOABLE = {
 }
 # A call still running when a rewind is planned: the rewind waits for it, then undoes it.
 _IN_FLIGHT = {ActionStatus.pending, ActionStatus.executing}
+# How long a step waits for a running (or approved and running) call before it fails, so a call
+# that never settles fails one step instead of holding the rewind, and every later one, forever.
+SETTLE_TIMEOUT_S = 30.0
 _AFTER_STEP = {
     StepResult.restored: ActionStatus.reverted,
     # A refund or a correction email offsets the effect; the step result says which it was.
@@ -279,16 +282,23 @@ class Rewinder:
             )
         return job
 
+    async def _settled(self, action_id: str) -> None:
+        await self.gateway.settled(action_id)
+        hold_settled = getattr(self.gateway.hold_manager, "settled", None)
+        if hold_settled is not None:
+            await hold_settled(action_id)
+
     async def _revert_one(self, action: Action) -> tuple[RewindStep, Action]:
         current = await self.store.get(action.id) or action
         adapter = self.gateway.by_system.get(current.system)
-        if current.status in _IN_FLIGHT:
+        if current.status in _IN_FLIGHT or current.status is ActionStatus.approved:
             # Still running when the rewind was planned: wait until its outcome is saved (and,
-            # for an approved payment, until its hold is recorded).
-            await self.gateway.settled(current.id)
-            hold_settled = getattr(self.gateway.hold_manager, "settled", None)
-            if hold_settled is not None:
-                await hold_settled(current.id)
+            # for an approved call, until its run and any payment hold are recorded).
+            try:
+                await asyncio.wait_for(self._settled(current.id), SETTLE_TIMEOUT_S)
+            except TimeoutError:
+                detail = f"Still running after {SETTLE_TIMEOUT_S:g} s, so it wasn't undone."
+                return _step(current, StepResult.failed, detail + " Rewind again later."), current
             current = await self.store.get(action.id) or current
         if current.status in (ActionStatus.held, ActionStatus.approved):
             hold_manager = self.gateway.hold_manager

@@ -326,6 +326,8 @@ async def test_rest_routes(svc: Services) -> None:
         reset = await c.post("/api/demo/reset")
         assert reset.status_code == 200 and reset.json()["ok"] is True
         assert (await c.get("/api/sessions")).json() == []
+        # The log is empty apart from the event that tells open dashboards to reload.
+        assert [e.root.event.value for e in await svc.bus.replay(0)] == ["demo.reset"]
 
 
 async def test_parallel_calls_are_undone_in_the_order_they_ran(

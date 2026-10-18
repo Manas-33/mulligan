@@ -12,7 +12,7 @@ import { Logo } from "./components/SystemObject.tsx";
 import { API_URL, DASHBOARD_TOKEN } from "./config.ts";
 import type { StreamStatus } from "./api/sse.ts";
 import { GatewayProblem, Loading, NoSessions } from "./components/States.tsx";
-import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
+import { currentSession, empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
 import type { Action, RewindJob } from "./types.ts";
 import { describeProblem, isUndoable, type Problem, shortId } from "./view.ts";
 
@@ -104,7 +104,14 @@ export function App() {
           setLostAt((t) => t ?? Date.now());
         }
       },
-      onEvent: (event) => dispatch({ type: "event", event }),
+      onEvent: (event) => {
+        dispatch({ type: "event", event });
+        if (event.event === "demo.reset") {
+          setSelected(null);
+          setRewinding(null);
+          void fetchSnapshot();
+        }
+      },
     });
     return () => stop.abort();
   }, [fetchSnapshot]);
@@ -126,7 +133,7 @@ export function App() {
   }, [load, fetchSnapshot]);
 
   const sessions = useMemo(() => sessionList(state), [state]);
-  const current = selected ?? sessions[0]?.id ?? null;
+  const current = currentSession(state, selected);
   const session = current ? state.sessions[current] : undefined;
   const actions = useMemo(() => (current ? timeline(state, current) : []), [state, current]);
   const held = useMemo(() => heldActions(state), [state]);
