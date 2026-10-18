@@ -84,7 +84,36 @@ mock-slack: ## Mock Slack MCP server on 127.0.0.1:8200 (UPSTREAM_MCP_SERVERS=sla
 	$(UV) run python ../demo/upstream/slack_server.py
 
 .PHONY: ci
-ci: types-check lint-contracts lint typecheck test ## Everything CI runs
+ci: types-check lint-contracts lint typecheck test photon-check dashboard-check ## Everything CI runs
+
+# --- Stream B: Photon service and dashboard ---------------------------------
+
+.PHONY: photon-setup
+photon-setup: ## Install the Photon service's deps
+	npm ci --prefix approvals-photon
+
+.PHONY: photon
+photon: ## Run the Photon service on the host (127.0.0.1:8100)
+	npm --prefix approvals-photon run dev
+
+.PHONY: photon-check
+photon-check: ## Type-check and test the Photon service
+	npm --prefix approvals-photon run typecheck
+	npm --prefix approvals-photon test
+
+.PHONY: dashboard-setup
+dashboard-setup: ## Install the dashboard's deps
+	npm ci --prefix dashboard
+
+.PHONY: dashboard
+dashboard: ## Run the dashboard dev server (127.0.0.1:5173; API defaults to the Prism mock on :4010)
+	npm --prefix dashboard run dev
+
+.PHONY: dashboard-check
+dashboard-check: ## Type-check, test and build the dashboard
+	npm --prefix dashboard run typecheck
+	npm --prefix dashboard test
+	npm --prefix dashboard run build
 
 # --- Stack -------------------------------------------------------------------
 

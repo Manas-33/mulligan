@@ -64,6 +64,9 @@ def create_app(
             "Content-Type",
             "X-Mulligan-Service-Token",
             "Last-Event-ID",
+            # Sentry's distributed-tracing headers from the dashboard, linking its traces to ours.
+            "sentry-trace",
+            "baggage",
         ],
     )
 
