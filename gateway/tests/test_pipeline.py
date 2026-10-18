@@ -305,3 +305,73 @@ async def test_rest_routes(svc: Services) -> None:
         reset = await c.post("/api/demo/reset")
         assert reset.status_code == 200 and reset.json()["ok"] is True
         assert (await c.get("/api/sessions")).json() == []
+
+
+async def test_parallel_calls_are_undone_in_the_order_they_ran(
+    svc: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first call is created first but reaches the system lock second, so it runs last."""
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 1}]
+    gate = asyncio.Event()
+    bump = svc.gateway._bump_session
+    calls = 0
+
+    async def slow_first_bump(session_id: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await gate.wait()
+        await bump(session_id)
+
+    monkeypatch.setattr(svc.gateway, "_bump_session", slow_first_bump)
+    first = asyncio.create_task(
+        svc.gateway.call_tool(session, "pg_update_rows", {"filter": flt, "values": {"price": 10}})
+    )
+    await asyncio.sleep(0.05)
+    await svc.gateway.call_tool(session, "pg_update_rows", {"filter": flt, "values": {"price": 20}})
+    gate.set()
+    await first
+    assert fake(svc).rows[1]["price"] == 10  # the call created first ran last
+
+    done = await run_rewind(svc, session.id)
+    assert [s.result for s in done.steps] == [StepResult.restored, StepResult.restored]
+    assert fake(svc).rows[1]["price"] == 49
+    assert done.verification["postgres"].ok is True
+
+
+async def test_a_call_still_running_is_waited_for_and_undone(
+    svc: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 1}]
+    adapter = fake(svc)
+    gate = asyncio.Event()
+    execute = adapter.execute
+
+    async def slow_execute(call: Any, before: Any) -> Any:
+        await gate.wait()
+        return await execute(call, before)
+
+    monkeypatch.setattr(adapter, "execute", slow_execute)
+    running = asyncio.create_task(
+        svc.gateway.call_tool(session, "pg_update_rows", {"filter": flt, "values": {"price": 0}})
+    )
+    await asyncio.sleep(0.05)
+    plan = await svc.rewinder.create(RewindRequest(scope=RewindScope(session_id=session.id)))
+    assert [(s.result, s.detail) for s in plan.steps] == [
+        (StepResult.pending, "Still running. The rewind waits for it.")
+    ]
+    job = await svc.rewinder.create(
+        RewindRequest(scope=RewindScope(session_id=session.id), dry_run=False)
+    )
+    await asyncio.sleep(0.05)
+    gate.set()
+    await running
+    await svc.rewinder.wait()
+    done = await svc.store.get_job(job.id)
+    assert done is not None and done.status is RewindJobStatus.completed
+    assert [s.result for s in done.steps] == [StepResult.restored]
+    assert adapter.rows[1]["price"] == 49
+    action = await svc.store.get(done.steps[0].action_id)
+    assert action is not None and action.status is ActionStatus.reverted

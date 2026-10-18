@@ -305,21 +305,23 @@ class Gateway:
                         summary=error,
                         is_error=True,
                     )
-        action = action.model_copy(
-            update={
-                "status": ActionStatus.executed,
-                "summary": result.summary,
-                "before_ref": before.ref,
-                "after_ref": after.ref,
-                "after_hashes": after.after_hashes,
-                "inverse": inverse,
-                "executed_at": utcnow(),
-                "sentry_trace_id": trace_id,
-            }
-        )
-        await self.store.save(action)
-        if pre is not None:
-            await self.store.put_checksum(action.id, adapter.system, pre, None)
+            # Saved before the lock is let go, so a rewind waiting on it reads the inverse, and
+            # executed_at follows the order calls ran in on this system (the rewind's order).
+            action = action.model_copy(
+                update={
+                    "status": ActionStatus.executed,
+                    "summary": result.summary,
+                    "before_ref": before.ref,
+                    "after_ref": after.ref,
+                    "after_hashes": after.after_hashes,
+                    "inverse": inverse,
+                    "executed_at": utcnow(),
+                    "sentry_trace_id": trace_id,
+                }
+            )
+            await self.store.save(action)
+            if pre is not None:
+                await self.store.put_checksum(action.id, adapter.system, pre, None)
         await self.bus.publish(EventName.action_executed, action)
         content = {**result.structured_content, "action_id": action.id, "status": "executed"}
         return action, result.model_copy(update={"structured_content": content})
