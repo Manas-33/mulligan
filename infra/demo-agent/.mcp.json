@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mulligan": {
+      "type": "http",
+      "url": "http://127.0.0.1:${MULLIGAN_MCP_PORT:-8001}/mcp",
+      "headers": { "Authorization": "Bearer ${MULLIGAN_AGENT_TOKEN}" }
+    }
+  }
+}

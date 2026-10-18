@@ -155,6 +155,14 @@ demo-live: ## Run the rogue agent live with an LLM and record it
 teammate-edit: ## A teammate's direct edits after the agent ran (kept and flagged by the rewind)
 	$(UV) run python ../demo/teammate_edit.py
 
+.PHONY: check-exposure
+check-exposure: ## Every route needs a token, MCP port serves only /mcp, tunnel exposes only MCP
+	$(UV) run python ../infra/deploy/check_exposure.py
+
+.PHONY: load-check
+load-check: ## 200 actions in one session, rewind under 30 s, checksum restored
+	$(UV) run python ../demo/scripts/load_check.py
+
 .PHONY: tunnel
 tunnel: ## Public HTTPS URL for the MCP port only (cloudflared quick tunnel, for Devin)
 	cloudflared tunnel --url http://127.0.0.1:$(MULLIGAN_MCP_PORT)
