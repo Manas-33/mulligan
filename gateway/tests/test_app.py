@@ -126,3 +126,17 @@ def test_a_comment_where_a_value_should_be_counts_as_unset(tmp_path: Path) -> No
     assert settings.upstream_mcp_servers == ""
     assert settings.mcp_public_url == ""
     assert settings.demo is True
+
+
+def test_sentry_sends_info_logs_and_traces() -> None:
+    import logging
+
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    from mulligan.__main__ import sentry_options
+
+    options = sentry_options(Settings(sentry_dsn="https://key@o0.ingest.sentry.io/0"))
+    assert options["enable_logs"] is True and options["traces_sample_rate"] == 1.0
+    [integration] = options["integrations"]
+    assert isinstance(integration, LoggingIntegration)
+    assert integration._sentry_logs_handler.level == logging.INFO

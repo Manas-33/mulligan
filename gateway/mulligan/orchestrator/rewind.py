@@ -38,6 +38,16 @@ _AFTER_STEP = {
 }
 
 
+# Sentry span status for each finished job.
+SPAN_STATUS = {
+    RewindJobStatus.completed: "ok",
+    RewindJobStatus.partial: "internal_error",
+    RewindJobStatus.failed: "internal_error",
+    RewindJobStatus.running: "unknown",
+    RewindJobStatus.planned: "ok",
+}
+
+
 class RewindBusy(RuntimeError):
     pass
 
@@ -146,10 +156,23 @@ class Rewinder:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
     async def _run(self, job: RewindJob, actions: list[Action]) -> None:
+        # Its own transaction: this task outlives the POST /api/rewind request that started it,
+        # so a span here would have no live parent and Sentry would drop it.
+        with sentry_sdk.start_transaction(op="mulligan.rewind", name=job.id) as transaction:
+            transaction.set_tag("mulligan.rewind_job_id", job.id)
+            transaction.set_tag("mulligan.session_id", job.scope.session_id or "")
+            transaction.set_data(
+                "mulligan.scope", job.scope.model_dump(mode="json", exclude_none=True)
+            )
+            transaction.set_data("mulligan.actions", len(actions))
+            job = await self._run_job(job, actions)
+            transaction.set_tag("mulligan.rewind_status", job.status.value)
+            transaction.set_status(SPAN_STATUS[job.status])
+
+    async def _run_job(self, job: RewindJob, actions: list[Action]) -> RewindJob:
         try:
-            with sentry_sdk.start_span(op="mulligan.rewind", name=job.id):
-                job = await self._run_steps(job, actions)
-                job = await self._verify(job, actions)
+            job = await self._run_steps(job, actions)
+            job = await self._verify(job, actions)
             failed = any(s.result is StepResult.failed for s in job.steps)
             mismatch = any(v.ok is False for v in job.verification.values())
             status = RewindJobStatus.partial if failed or mismatch else RewindJobStatus.completed
@@ -172,6 +195,7 @@ class Rewinder:
             self.running = None
             for callback in self.on_finished:
                 callback(job)
+        return job
 
     async def _run_steps(self, job: RewindJob, actions: list[Action]) -> RewindJob:
         steps = list(job.steps)
