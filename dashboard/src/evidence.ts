@@ -29,12 +29,12 @@ export const EVIDENCE = {
   },
   paper: {
     /** Share link for the Paper file "Mulligan Dashboard". */
-    fileUrl: null as string | null,
+    fileUrl: "https://app.paper.design/file/01M5654M9Y3SSKG6E94QRHFT40/p-4-0" as string | null,
     shots: [
-      { src: "/evidence/paper-round.png", alt: "Paper design: the round screen", caption: "The round: what the agent did, and what’s held." },
-      { src: "/evidence/paper-plan.png", alt: "Paper design: the rewind plan", caption: "The plan: a dry run, nothing has moved yet." },
-      { src: "/evidence/paper-running.png", alt: "Paper design: the live rewind", caption: "The run: objects fly back to the tee." },
-      { src: "/evidence/paper-proof.png", alt: "Paper design: the checksum proof", caption: "The proof: every system hashed again." },
+      { src: "/evidence/paper-round.jpg", alt: "Paper design: the round screen", caption: "v4b · 01 Fairway: what the agent did, and what’s held." },
+      { src: "/evidence/paper-plan.jpg", alt: "Paper design: the rewind plan", caption: "v4b · 02 The plan: a dry run, nothing has moved yet." },
+      { src: "/evidence/paper-running.jpg", alt: "Paper design: the live rewind", caption: "v4b · 03 Rewinding: objects fly back to the tee." },
+      { src: "/evidence/paper-proof.jpg", alt: "Paper design: the checksum proof", caption: "v4b · 04 Proof: every system hashed again." },
     ] satisfies Shot[],
   },
 };
