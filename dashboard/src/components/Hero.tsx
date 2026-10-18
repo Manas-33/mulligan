@@ -67,7 +67,13 @@ function PileItem({ system, index, actions }: { system: System; index: number; a
       style={{ left: `${slot.left}%`, top: `${slot.top}%`, rotate: `${slot.tilt}deg`, animationDelay: `${index * -1.3}s` }}
     >
       {/* key on the count so a new action makes the object hop */}
-      <SystemObject key={actions.length} system={system} size={slot.size} className="hop" />
+      <SystemObject
+        key={actions.length}
+        system={system}
+        size={slot.size}
+        className="hop"
+        style={{ width: `calc(${slot.size}px * var(--pile-scale))`, height: "auto" }}
+      />
       <span className={`sticker sticker-small ${held ? "sticker-berry" : "sticker-cream"}`}>
         {held ? "held" : laneCaption(system, actions)}
       </span>

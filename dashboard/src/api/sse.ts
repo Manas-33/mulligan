@@ -32,17 +32,21 @@ export function createFrameParser() {
   };
 }
 
+export type StreamStatus = "live" | "reconnecting" | "unauthorized";
+
 export type StreamOptions = {
   baseUrl: string;
   token: string;
   onEvent: (event: MulliganEvent) => void;
-  onStatus?: (status: "live" | "reconnecting") => void;
+  /** live on each (re)connect, reconnecting after a drop, unauthorized when the token is refused (no retry). */
+  onStatus?: (status: StreamStatus) => void;
   signal: AbortSignal;
   fetch?: typeof fetch;
   retryMs?: number;
 };
 
-/** Stream events until `signal` aborts, reconnecting (and resuming from the last seq) on errors. */
+/** Stream events until `signal` aborts, reconnecting (and resuming from the last seq) on errors. A 401
+ * or 403 ends it: retrying with the same token can't help. */
 export async function streamEvents(opts: StreamOptions): Promise<void> {
   const { baseUrl, token, onEvent, onStatus, signal, fetch: doFetch = fetch, retryMs = 2000 } = opts;
   let lastId: string | undefined;
@@ -51,6 +55,10 @@ export async function streamEvents(opts: StreamOptions): Promise<void> {
       const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "text/event-stream" };
       if (lastId) headers["Last-Event-ID"] = lastId;
       const res = await doFetch(new URL("/api/events", baseUrl), { headers, signal });
+      if (res.status === 401 || res.status === 403) {
+        onStatus?.("unauthorized");
+        return;
+      }
       if (!res.ok || !res.body) throw new Error(`events: HTTP ${res.status}`);
       onStatus?.("live");
       const parse = createFrameParser();

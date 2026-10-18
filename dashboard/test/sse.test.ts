@@ -64,9 +64,27 @@ describe("streamEvents", () => {
     const statuses: string[] = [];
     const f = vi.fn<typeof fetch>(async () => {
       if (statuses.length >= 2) stop.abort();
-      return streamResponse("", 401);
+      return streamResponse("", 503);
     });
     await streamEvents({ baseUrl: "http://x", token: "t", signal: stop.signal, fetch: f, retryMs: 1, onEvent: () => {}, onStatus: (s) => statuses.push(s) });
     expect(statuses.every((s) => s === "reconnecting")).toBe(true);
+  });
+});
+
+describe("streamEvents on a refused token", () => {
+  it("reports unauthorized once and stops retrying", async () => {
+    const statuses: string[] = [];
+    const f = vi.fn<typeof fetch>(async () => new Response("", { status: 401 }));
+    await streamEvents({
+      baseUrl: "http://x",
+      token: "bad",
+      signal: new AbortController().signal,
+      fetch: f,
+      retryMs: 1,
+      onEvent: () => {},
+      onStatus: (s) => statuses.push(s),
+    });
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(statuses).toEqual(["unauthorized"]);
   });
 });

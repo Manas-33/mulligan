@@ -38,14 +38,16 @@ export function planSentence(c: PlanCounts): string {
 
 /** Text for the summary after a finished rewind (the same words the iMessage summary uses). */
 export function rewindSummary(job: RewindJob, actions: Record<string, Action>, label: string): string {
-  const c = planCounts(job, actions);
+  const left = new Set(unfinishedSteps(job).map((s) => s.action_id));
+  const c = planCounts({ ...job, steps: job.steps.filter((s) => !left.has(s.action_id)) }, actions);
   const checks = Object.entries(job.verification);
   const ok = checks.filter(([, v]) => v.ok === true).map(([s]) => systemName(s as System));
   const bad = checks.filter(([, v]) => v.ok === false).map(([s]) => systemName(s as System));
-  const bits = [`Rewound ${label}.`];
+  const bits = [job.status === "failed" ? `The rewind of ${label} stopped early.` : `Rewound ${label}.`];
   if (c.restore + c.compensate) bits.push(`${plural(c.restore + c.compensate, "change")} undone.`);
   if (c.held) bits.push(`${plural(c.held, "held action")} refused.`);
   if (c.kept) bits.push(`Kept ${plural(c.kept, "human edit")}.`);
+  if (left.size) bits.push(`${plural(left.size, "change")} didn't come back.`);
   if (ok.length) bits.push(`${listJoin(ok)} ${ok.length === 1 ? "checksum matches" : "checksums match"}.`);
   if (bad.length) bits.push(`${listJoin(bad)} did not match.`);
   return bits.join(" ");
@@ -148,3 +150,29 @@ export const UNDOABLE = new Set<Action["status"]>(["executed", "held", "approved
 /** Undoable actions created at or after `since`: what "Rewind to here" would take back. */
 export const undoableFrom = (actions: Action[], since: string): Action[] =>
   actions.filter((a) => UNDOABLE.has(a.status) && Date.parse(a.created_at) >= Date.parse(since));
+
+/** Why a gateway call failed, sorted into what the screens can say something useful about. */
+export type Problem = { kind: "unauthorized" | "unreachable" | "gateway"; status?: number; detail: string };
+
+/** Accepts ApiError's shape ({status, detail}) without importing the client, so this stays pure. */
+export function describeProblem(e: unknown): Problem {
+  if (e && typeof e === "object" && "status" in e && typeof e.status === "number") {
+    const status = e.status;
+    const detail = detailText((e as { detail?: unknown }).detail) || `The gateway answered ${status}.`;
+    return { kind: status === 401 || status === 403 ? "unauthorized" : "gateway", status, detail };
+  }
+  // fetch rejects with a TypeError when nothing answers (refused, DNS, CORS).
+  return { kind: "unreachable", detail: e instanceof Error ? e.message : String(e) };
+}
+
+/** A FastAPI `detail` as one sentence: a string, or a 422's list of {msg}. */
+export function detailText(detail: unknown): string {
+  if (detail === null || detail === undefined) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((d) => (d && typeof d === "object" && "msg" in d ? String(d.msg) : String(d))).join("; ");
+  return JSON.stringify(detail);
+}
+
+/** Steps a finished run didn't put back: they failed, or the run stopped before reaching them. */
+export const unfinishedSteps = (job: RewindJob): RewindStep[] =>
+  job.status === "completed" ? job.steps.filter((s) => s.result === "failed") : job.steps.filter((s) => s.result === "failed" || s.result === "pending");

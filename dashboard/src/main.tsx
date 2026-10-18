@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { Crashed } from "./components/States.tsx";
 import "@fontsource-variable/open-sans";
 import "@fontsource/courier-prime/400.css";
 import "@fontsource/courier-prime/700.css";
@@ -14,7 +15,7 @@ createRoot(document.getElementById("root")!, {
   onRecoverableError: Sentry.reactErrorHandler(),
 }).render(
   <StrictMode>
-    <Sentry.ErrorBoundary fallback={<p role="alert">Something broke. Reload the page.</p>}>
+    <Sentry.ErrorBoundary fallback={({ eventId, resetError }) => <Crashed eventId={eventId} onReset={resetError} />}>
       <App />
     </Sentry.ErrorBoundary>
   </StrictMode>,
