@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from mulligan_fetch.guardian_logic import GuardianLogic, parse, rewind_card
+from mulligan_fetch.mulligan_api import MulliganError
 
 SES = "ses_01M561Q6R04CJZXHXRCFFNM7C4"
 HELD = {
@@ -159,6 +160,28 @@ async def test_approve_by_code_and_by_card_use_the_asi_one_channel() -> None:
     assert api.decisions[-1][:3] == (HELD["id"], "reject", "4821") and "Rejected" in rejected.text
     missing = await logic.handle("user1", parse("approve 9999"))
     assert "No held action with code 9999" in missing.text
+
+
+async def test_sessions_and_actions_it_didnt_run_are_refused() -> None:
+    api = FakeAPI()
+    logic = GuardianLogic(api)  # type: ignore[arg-type]
+    other = "ses_01M561Q6R04CJZXHXRCFFNM7C5"  # say, a Claude Code session
+    typed = await logic.handle(
+        "user1", parse(json.dumps({"action": "rewind", "session_id": other}))
+    )
+    assert "isn't a session I ran" in typed.text and api.rewound == []
+    click = json.dumps({"action": "approve", "action_id": HELD["id"], "code": "4821"})
+    approved = await logic.handle("user1", parse(click))
+    assert "isn't from a session I ran" in approved.text and api.decisions == []
+
+
+async def test_gateway_unreachable_after_a_task_still_gets_a_reply() -> None:
+    class Down(FakeAPI):
+        async def action(self, action_id: str) -> dict[str, Any]:
+            raise MulliganError("GET /api/actions/x: ConnectError reaching Mulligan")
+
+    reply = await GuardianLogic(Down()).task_finished("user1", "cleanup", [], ["act_x"])  # type: ignore[arg-type]
+    assert "couldn't report" in reply.text and reply.end_session
 
 
 def test_held_outcomes_cover_refunds_and_upstream_calls() -> None:

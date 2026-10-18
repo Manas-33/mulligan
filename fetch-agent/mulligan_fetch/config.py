@@ -69,3 +69,10 @@ class Config:
             guardian_port=int(get("GUARDIAN_AGENT_PORT", "8010")),
             worker_port=int(get("WORKER_AGENT_PORT", "8011")),
         )
+
+    def check_seeds(self) -> None:
+        """An empty seed gives a fixed, public key, and two equal seeds give one address."""
+        if not (self.guardian_seed and self.worker_seed):
+            raise SystemExit("set GUARDIAN_AGENT_SEED and WORKER_AGENT_SEED in .env")
+        if self.guardian_seed == self.worker_seed:
+            raise SystemExit("GUARDIAN_AGENT_SEED and WORKER_AGENT_SEED must differ")
