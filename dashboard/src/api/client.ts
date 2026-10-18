@@ -6,6 +6,8 @@ import type {
   ActionStatus,
   ApprovalDecision,
   Checksums,
+  RewindJob,
+  RewindScope,
   Session,
   SessionStatus,
   System,
@@ -47,6 +49,10 @@ export function createClient({ baseUrl, token, fetch: doFetch = fetch }: ClientO
     listActions: (query: ActionQuery = {}) => request<Action[]>("/api/actions", { query }),
     getAction: (id: string) => request<Action>(`/api/actions/${encodeURIComponent(id)}`),
     getChecksums: () => request<Checksums>("/api/checksums"),
+    /** Dry run (the plan, nothing changes) or run a rewind. A run returns status running; follow rewind.* events. */
+    rewind: (scope: RewindScope, dryRun: boolean) =>
+      request<RewindJob>("/api/rewind", { body: { scope, dry_run: dryRun, requested_by: "dashboard" } }),
+    getRewind: (id: string) => request<RewindJob>(`/api/rewind/${encodeURIComponent(id)}`),
     /** Approve or reject a held action from the dashboard (needs its approval code). */
     decide: (action: Action, decision: ApprovalDecision) =>
       request<Action>(`/api/approvals/${encodeURIComponent(action.id)}/decision`, {

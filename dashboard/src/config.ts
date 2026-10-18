@@ -9,3 +9,6 @@ export const DASHBOARD_TOKEN: string =
   env.VITE_MULLIGAN_DASHBOARD_TOKEN || env.MULLIGAN_DASHBOARD_TOKEN || "dev-dashboard-token";
 export const SENTRY_DSN: string | undefined = env.SENTRY_DSN_DASHBOARD || undefined;
 export const SENTRY_ENVIRONMENT: string = env.SENTRY_ENVIRONMENT || "dev";
+/** Base URL for a Sentry trace; the action's sentry_trace_id is appended. */
+export const SENTRY_TRACE_URL: string =
+  env.VITE_SENTRY_TRACE_URL || "https://mulligan.sentry.io/explore/traces/trace/";

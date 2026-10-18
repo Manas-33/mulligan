@@ -47,6 +47,18 @@ services:
       timeout: 3s
       retries: 30
 
+  mailpit:
+    # Catches every email Mulligan sends (email_send, rewind corrections). Inbox: http://127.0.0.1:8025
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   gateway:
     profiles: [app]
     build:
@@ -67,6 +79,8 @@ services:
       PROD_DB_ADMIN_URL: postgresql://acme:acme@prod-db:5432/acme   # demo reset only
       MULLIGAN_SEED_DIR: /app/demo/seed
       PHOTON_SERVICE_URL: http://approvals-photon:8100
+      EMAIL_SMTP_HOST: mailpit
+      EMAIL_SMTP_PORT: "1025"
       MULLIGAN_POLICY_PATH: /app/contracts/reversibility_policy.yaml
     ports:
       - "127.0.0.1:${MULLIGAN_API_PORT:-8000}:8000"
@@ -74,6 +88,7 @@ services:
     depends_on:
       mulligan-db: { condition: service_healthy }
       prod-db: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 3s

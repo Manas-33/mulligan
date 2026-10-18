@@ -11,10 +11,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from mulligan.core import utcnow
 from mulligan.holds.notify import NotifyOutcome, PhotonNotifier, holds_env
+from mulligan.holds.payments import CANCEL, REFUND, PaymentsAdapter, release_time, undo_window
 from mulligan.interfaces import HoldDeps, HoldManager, HoldNotFound, NotHeld, WrongCode
 from mulligan.models import (
     Action,
@@ -47,8 +48,15 @@ class CodesExhausted(RuntimeError):
 
 class PhotonHoldManager(HoldManager):
     def __init__(
-        self, deps: HoldDeps, notifier: PhotonNotifier, ttl: timedelta | None = DEFAULT_TTL
+        self,
+        deps: HoldDeps,
+        notifier: PhotonNotifier,
+        ttl: timedelta | None = DEFAULT_TTL,
+        payments: PaymentsAdapter | None = None,
+        payment_window: timedelta | None = None,
     ) -> None:
+        self.payments = payments
+        self.payment_window = payment_window or undo_window()
         self.deps = deps
         self.notifier = notifier
         self.ttl = ttl
@@ -138,7 +146,8 @@ class PhotonHoldManager(HoldManager):
         if not approve:
             return action
         try:
-            return await self.deps.runner.run_held(action_id)
+            ran = await self.deps.runner.run_held(action_id)
+            return await self._record_payment_hold(ran)
         except Exception as exc:  # noqa: BLE001 (the approval is recorded; never leave it "approved")
             log.exception("running approved action %s failed", action_id)
             failed = (await self.deps.store.get(action_id) or action).model_copy(
@@ -150,6 +159,72 @@ class PhotonHoldManager(HoldManager):
             await self.deps.store.save(failed)
             await self.deps.bus.publish(EventName.action_failed, failed)
             return failed
+
+    async def _record_payment_hold(self, action: Action) -> Action:
+        """After an approved payment is authorized, put the PaymentIntent and the undo window on
+        `action.hold` (the core stores only the adapter's inverse)."""
+        if (
+            action.status is not ActionStatus.executed
+            or action.hold is None
+            or action.inverse is None
+            or action.inverse.kind != CANCEL
+        ):
+            return action
+        payload = action.inverse.payload
+        capture_before = datetime.fromisoformat(payload["capture_before"])
+        action = action.model_copy(
+            update={
+                "hold": action.hold.model_copy(
+                    update={
+                        "external_id": payload["payment_intent"],
+                        "authorization_expires_at": capture_before,
+                        "release_at": release_time(utcnow(), capture_before, self.payment_window),
+                    }
+                )
+            }
+        )
+        await self.deps.store.save(action)
+        # Same event, full object: the dashboard replaces its copy and shows the capture time.
+        await self.deps.bus.publish(EventName.action_executed, action)
+        return action
+
+    async def _capture_due(self, now: datetime) -> list[Action]:
+        """Capture authorized payments whose undo window has ended."""
+        if self.payments is None:
+            return []
+        captured: list[Action] = []
+        for action in await self.deps.store.list_by_status(ActionStatus.executed.value):
+            hold, inverse = action.hold, action.inverse
+            if (
+                action.system is not self.payments.system
+                or hold is None
+                or hold.release_at is None
+                or hold.release_at > now
+                or inverse is None
+                or inverse.kind != CANCEL
+            ):
+                continue
+            try:
+                status = await self.payments.capture(action)
+            except Exception:  # noqa: BLE001 (retried next tick; Sentry gets it)
+                log.exception("capturing %s failed", action.id)
+                continue
+            if status != "succeeded":
+                log.error("capture of %s returned %s", action.id, status)
+                continue
+            action = action.model_copy(
+                update={
+                    "inverse": inverse.model_copy(
+                        update={
+                            "kind": REFUND,
+                            "payload": {**inverse.payload, "captured_at": now.isoformat()},
+                        }
+                    )
+                }
+            )
+            await self.deps.store.save(action)
+            captured.append(action)
+        return captured
 
     # --- expire ---------------------------------------------------------------------------------
 
@@ -164,9 +239,12 @@ class PhotonHoldManager(HoldManager):
                 action = action.model_copy(update={"status": ActionStatus.expired})
                 await self.deps.store.save(action)
                 changed.append(action)
+            captured = await self._capture_due(now)
         for action in changed:
             await self.deps.bus.publish(EventName.hold_expired, action)
-        return changed
+        for action in captured:
+            await self.deps.bus.publish(EventName.hold_released, action)
+        return changed + captured
 
     # --- rewind before it ran -------------------------------------------------------------------
 

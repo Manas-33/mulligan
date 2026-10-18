@@ -39,3 +39,35 @@ body { margin: 0; }
 .conn { font-size: 12px; }
 .conn-live { color: var(--ok); }
 .conn-reconnecting, .conn-error { color: var(--bad); }
+
+.timeline-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.timeline-head h2 { margin: 0; font-size: 18px; }
+.timeline-head button { margin-left: auto; }
+button.danger, .dialog button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--bad); background: var(--bad); color: #fff; cursor: pointer; }
+.dialog button.secondary { background: none; color: var(--fg); border-color: var(--line); }
+.dialog button:not(.danger):not(.secondary) { background: var(--accent); border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+.held-panel { border: 1px solid var(--held); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.held-panel h2 { font-size: 15px; margin: 0 0 8px; color: var(--held); }
+.held-panel ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.action-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.35); display: grid; place-items: center; padding: 16px; }
+.dialog { background: var(--bg); border-radius: 10px; width: min(900px, 100%); max-height: 90vh; overflow: auto; padding: 16px 20px; }
+.dialog header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.dialog h2 { margin: 0; font-size: 18px; }
+.dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.steps { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.step { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.step-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.step p { margin: 6px 0 0; }
+.kept { color: var(--held); }
+.diff { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.diff th, .diff td { text-align: left; border-bottom: 1px solid var(--line); padding: 4px 6px; vertical-align: top; word-break: break-word; }
+.change-keep_human_edit td { color: var(--held); }
+.pill-restored, .pill-compensated { color: var(--ok); }
+.pill-kept_human_edit { color: var(--held); }
+.verify ul { list-style: none; padding: 0; }
+.verify li { padding: 6px 0; }
+.verify li.ok strong { color: var(--ok); }
+.verify li.bad strong { color: var(--bad); }
+.hash { font-size: 12px; color: var(--muted); }
