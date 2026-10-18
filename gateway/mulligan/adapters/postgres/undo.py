@@ -140,8 +140,7 @@ async def undrop(conn: AsyncConnection[Any], p: dict[str, Any]) -> None:
             sql.Identifier(p["trash_schema"], p["name"]), sql.Identifier(p["schema"])
         )
     )
-    # Drops logged before ro_views existed revoked the grant on every dependent view.
-    for view in p.get("ro_views", p.get("dependent_views", [])):
+    for view in p.get("dependent_views", []):
         await conn.execute(sql.SQL("GRANT SELECT ON {} TO mulligan_ro").format(sql.SQL(view)))
 
 

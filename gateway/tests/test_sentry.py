@@ -12,10 +12,9 @@ import sentry_sdk
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 
-from mulligan.__main__ import SkipHealthChecks, scrub_tool_arguments, sentry_options
+from mulligan.__main__ import SkipHealthChecks
 from mulligan.models import RewindJob, RewindJobStatus, RewindScope
 from mulligan.orchestrator.rewind import Rewinder
-from mulligan.settings import Settings
 
 SES = "ses_01M561Q6R04CJZXHXRCFFNM7C4"
 
@@ -122,25 +121,3 @@ def test_healthchecks_stay_out_of_the_logs() -> None:
     assert not skip.filter(access("/healthz"))
     assert skip.filter(access("/api/actions?limit=5"))
     assert skip.filter(logging.LogRecord("uvicorn.error", logging.INFO, "", 1, "Started", (), None))
-
-
-def test_tool_arguments_and_frame_locals_stay_out_of_sentry() -> None:
-    event = {
-        "contexts": {
-            "trace": {"data": {"mcp.request.argument.to": '["a@b.c"]', "mcp.tool.name": "x"}}
-        },
-        "spans": [{"data": {"mcp.request.argument.body": "secret", "mulligan.action_id": "act_1"}}],
-    }
-    out = scrub_tool_arguments(event, None)
-    assert out["contexts"]["trace"]["data"] == {
-        "mcp.request.argument.to": "[scrubbed]",
-        "mcp.tool.name": "x",
-    }
-    assert out["spans"][0]["data"] == {
-        "mcp.request.argument.body": "[scrubbed]",
-        "mulligan.action_id": "act_1",
-    }
-    options = sentry_options(Settings(sentry_dsn="https://key@o0.ingest.sentry.io/0"))
-    assert options["include_local_variables"] is False
-    assert options["before_send_transaction"] is scrub_tool_arguments
-    assert options["send_default_pii"] is False

@@ -21,10 +21,7 @@ class MulliganAPI:
         self.client.headers["X-Mulligan-Service-Token"] = service_token
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        try:
-            response = await self.client.request(method, path, **kwargs)
-        except httpx.HTTPError as exc:
-            raise MulliganError(f"{method} {path}: {type(exc).__name__} reaching Mulligan") from exc
+        response = await self.client.request(method, path, **kwargs)
         if response.status_code >= 400:
             detail: Any = response.text
             try:
@@ -36,10 +33,6 @@ class MulliganAPI:
 
     async def action(self, action_id: str) -> dict[str, Any]:
         result: dict[str, Any] = await self._request("GET", f"/api/actions/{action_id}")
-        return result
-
-    async def session(self, session_id: str) -> dict[str, Any]:
-        result: dict[str, Any] = await self._request("GET", f"/api/sessions/{session_id}")
         return result
 
     async def session_actions(self, session_id: str) -> list[dict[str, Any]]:

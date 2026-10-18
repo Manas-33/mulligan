@@ -182,35 +182,8 @@ class GuardianLogic:
 
     api: MulliganAPI
     last_session: dict[str, str] = field(default_factory=dict)  # chat sender -> session id
-    # Sessions the worker ran. A card or typed JSON can name a session or action, and the service
-    # token can rewind anyone's, so only these are acted on (not Claude Code's or Devin's).
-    sessions: set[str] = field(default_factory=set)
-
-    async def ran(self, session_id: str) -> bool:
-        """Whether the worker ran this session. The gateway knows whose a session is, so a card
-        from before a Guardian restart still works."""
-        if session_id in self.sessions or session_id in self.last_session.values():
-            return True
-        try:
-            session = await self.api.session(session_id)
-        except MulliganError:
-            return False
-        if (session.get("agent") or {}).get("kind") != "fetch":
-            return False
-        self.sessions.add(session_id)
-        return True
 
     async def task_finished(
-        self, sender: str, task: str, steps: list[dict[str, Any]], action_ids: list[str]
-    ) -> Reply:
-        try:
-            return await self._task_finished(sender, task, steps, action_ids)
-        except MulliganError as exc:
-            return Reply(
-                f"The task ran, but Mulligan couldn't report on it: {exc}", end_session=True
-            )
-
-    async def _task_finished(
         self, sender: str, task: str, steps: list[dict[str, Any]], action_ids: list[str]
     ) -> Reply:
         if not action_ids:
@@ -218,7 +191,6 @@ class GuardianLogic:
             return Reply(f"The worker couldn't run that through Mulligan: {ran}.", end_session=True)
         session_id = (await self.api.action(action_ids[0]))["session_id"]
         self.last_session[sender] = session_id
-        self.sessions.add(session_id)
         actions = await self.api.session_actions(session_id)
         held = [a for a in actions if a["status"] == "held"]
         text = f'Done: "{task}" ran through Mulligan (session {session_id}).\n\n'
@@ -245,8 +217,6 @@ class GuardianLogic:
         session_id = command.session_id or self.last_session.get(sender)
         if command.kind == "keep":
             return Reply("Okay, I'm leaving the session as it is.", end_session=True)
-        if session_id is not None and not await self.ran(session_id):
-            return Reply("That isn't a session I ran, so I can't act on it.", end_session=True)
         if session_id is None and command.kind in {"rewind", "status"}:
             return Reply(
                 "There's no session to work on yet. Give me a task first.", end_session=True
@@ -280,8 +250,6 @@ class GuardianLogic:
             if not held:
                 return Reply(f"No held action with code {code} in your session.", end_session=True)
             action_id = held[0]["id"]
-        elif not await self.ran((await self.api.action(action_id))["session_id"]):
-            return Reply("That action isn't from a session I ran.", end_session=True)
         decision = "approve" if command.kind == "approve" else "reject"
         action = await self.api.decide(action_id, decision, code or "", f"asi_one:{sender[:24]}")
         verb = "Approved" if decision == "approve" else "Rejected"

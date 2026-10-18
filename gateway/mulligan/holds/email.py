@@ -20,7 +20,7 @@ from email.utils import formatdate
 from typing import ClassVar, Protocol
 
 from mulligan.holds.notify import holds_env
-from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult, WriteUncertain
+from mulligan.interfaces import Adapter, Capture, ToolCall, ToolResult
 from mulligan.models import Action, Inverse, RewindStep, StepResult, System
 
 CORRECTION = "email.send_correction"
@@ -32,15 +32,6 @@ class Outgoing:
     subject: str
     body: str
     cc: tuple[str, ...] = ()
-
-
-class PartialSend(Exception):
-    """Sending stopped partway: `sent` lists the recipients whose message already went out."""
-
-    def __init__(self, sent: list[str], ids: list[str], cause: BaseException) -> None:
-        super().__init__(f"sent {len(sent)} before failing: {cause}")
-        self.sent = sent
-        self.ids = ids
 
 
 class Mailer(Protocol):
@@ -57,31 +48,20 @@ class SmtpMailer:
 
     def send(self, sender: str, messages: list[Outgoing]) -> list[str]:
         ids: list[str] = []
-        sent: list[str] = []
         with smtplib.SMTP(self.host, self.port, timeout=self.timeout_s) as smtp:
-            try:
-                for m in messages:
-                    ids.append(self._send_one(smtp, sender, m))
-                    sent.append(m.to)
-            except Exception as exc:
-                if sent:
-                    raise PartialSend(sent, ids, exc) from exc
-                raise
+            for m in messages:
+                msg = EmailMessage()
+                msg["From"] = sender
+                msg["To"] = m.to
+                if m.cc:
+                    msg["Cc"] = ", ".join(m.cc)
+                msg["Subject"] = m.subject
+                msg["Date"] = formatdate(localtime=False)
+                msg["Message-ID"] = f"<{uuid.uuid4().hex}@mulligan.local>"
+                msg.set_content(m.body)
+                smtp.send_message(msg)
+                ids.append(str(msg["Message-ID"]))
         return ids
-
-    @staticmethod
-    def _send_one(smtp: smtplib.SMTP, sender: str, m: Outgoing) -> str:
-        msg = EmailMessage()
-        msg["From"] = sender
-        msg["To"] = m.to
-        if m.cc:
-            msg["Cc"] = ", ".join(m.cc)
-        msg["Subject"] = m.subject
-        msg["Date"] = formatdate(localtime=False)
-        msg["Message-ID"] = f"<{uuid.uuid4().hex}@mulligan.local>"
-        msg.set_content(m.body)
-        smtp.send_message(msg)
-        return str(msg["Message-ID"])
 
 
 def smtp_from_env() -> SmtpMailer:
@@ -103,14 +83,6 @@ def _step(action: Action, result: StepResult, detail: str) -> RewindStep:
         changes_truncated=False,
         detail=detail,
     )
-
-
-def outgoing(to: list[str], subject: str, body: str, cc: tuple[str, ...]) -> list[Outgoing]:
-    """One message per recipient; the cc'd addresses get one copy, on the first."""
-    return [
-        Outgoing(to=a, subject=subject, body=body, cc=cc if i == 0 else ())
-        for i, a in enumerate(to)
-    ]
 
 
 def correction_body(subject: str) -> str:
@@ -146,22 +118,8 @@ class EmailAdapter(Adapter):
         to = [str(a) for a in call.args["to"]]
         cc = tuple(str(a) for a in call.args.get("cc") or [])
         subject, body = str(call.args["subject"]), str(call.args["body"])
-        messages = outgoing(to, subject, body, cc)
-        try:
-            ids = await asyncio.to_thread(self.mailer.send, self.sender, messages)
-        except PartialSend as exc:
-            # Some went out: keep a correction for exactly those, so a rewind can send it.
-            state = {
-                "recipients": exc.sent,
-                "cc": list(cc),
-                "subject": subject,
-                "message_ids": exc.ids,
-            }
-            raise WriteUncertain(
-                f"email stopped after {len(exc.sent)} of {len(to)} recipients: {exc}",
-                before_ref=None,
-                inverse=Inverse(kind=CORRECTION, payload=state),
-            ) from exc
+        messages = [Outgoing(to=a, subject=subject, body=body, cc=cc) for a in to]
+        ids = await asyncio.to_thread(self.mailer.send, self.sender, messages)
         before.state.update(recipients=to, cc=list(cc), subject=subject, message_ids=ids)
         n = len(to)
         return ToolResult(
@@ -193,7 +151,10 @@ class EmailAdapter(Adapter):
         if not self.send_corrections:
             return _step(action, StepResult.skipped, f"{n} emails already sent; can't be recalled.")
         subject = f"Correction: {p['subject']}"
-        messages = outgoing(p["recipients"], subject, correction_body(p["subject"]), tuple(p["cc"]))
+        messages = [
+            Outgoing(to=a, subject=subject, body=correction_body(p["subject"]), cc=tuple(p["cc"]))
+            for a in p["recipients"]
+        ]
         try:
             await asyncio.to_thread(self.mailer.send, self.sender, messages)
         except Exception as exc:  # noqa: BLE001 (revert reports failures, never raises)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime
 
 import sentry_sdk
 
@@ -36,8 +35,6 @@ _UNDOABLE = {
     ActionStatus.approved,
     ActionStatus.revert_failed,
 }
-# A call still running when a rewind is planned: the rewind waits for it, then undoes it.
-_IN_FLIGHT = {ActionStatus.pending, ActionStatus.executing}
 _AFTER_STEP = {
     StepResult.restored: ActionStatus.reverted,
     # A refund or a correction email offsets the effect; the step result says which it was.
@@ -74,19 +71,6 @@ def undoable(action: Action) -> bool:
     if action.status is ActionStatus.failed:
         return may_have_landed(action)
     return action.status in _UNDOABLE
-
-
-def in_flight(action: Action) -> bool:
-    return (
-        action.status in _IN_FLIGHT
-        and action.reversibility.label is not ReversibilityLabel.read_only
-    )
-
-
-def ran_at(action: Action) -> datetime:
-    """When the call ran on its system. Calls take a per-system lock in the order they reach
-    it, which can differ from the order they were created in (parallel tool calls)."""
-    return action.executed_at or action.created_at
 
 
 class RewindBusy(RuntimeError):
@@ -127,8 +111,7 @@ class Rewinder:
         self.on_finished: list[Callable[[RewindJob], object]] = []
 
     async def select(self, request: RewindRequest) -> list[Action]:
-        """Actions in scope that changed something (or are still running), newest first by
-        when they ran, so each one is undone before the call that ran before it."""
+        """Actions in scope that changed something, newest first."""
         scope = request.scope
         actions = await self.store.list_actions(
             session_id=scope.session_id,
@@ -137,9 +120,7 @@ class Rewinder:
             newest_first=True,
             limit=None,
         )
-        selected = [a for a in actions if undoable(a) or in_flight(a)]
-        # A call still running finishes after every call that already ran on its system.
-        return sorted(selected, key=lambda a: (in_flight(a), ran_at(a)), reverse=True)
+        return [a for a in actions if undoable(a)]
 
     async def recover(self) -> list[Action]:
         """Mark actions left ``reverting`` (the gateway stopped, or the log was unreachable, in
@@ -157,8 +138,6 @@ class Rewinder:
         return recovered
 
     async def plan_step(self, action: Action) -> RewindStep:
-        if action.status in _IN_FLIGHT:
-            return _step(action, StepResult.pending, "Still running. The rewind waits for it.")
         if action.status in (ActionStatus.held, ActionStatus.approved):
             return _step(action, StepResult.pending, "Still held. The rewind rejects it.")
         if action.system is System.upstream:
@@ -270,7 +249,6 @@ class Rewinder:
                 span.set_data("mulligan.action_id", action.id)
                 step, action = await self._revert_one(action)
             steps[index] = step
-            actions[index] = action  # verify reads the inverse a call still running saved later
             job = job.model_copy(update={"steps": list(steps)})
             await self.store.save_job(job)
             await self.bus.publish(
@@ -281,30 +259,18 @@ class Rewinder:
 
     async def _revert_one(self, action: Action) -> tuple[RewindStep, Action]:
         current = await self.store.get(action.id) or action
-        adapter = self.gateway.by_system.get(current.system)
-        if current.status in _IN_FLIGHT:
-            # Still running when the rewind was planned: wait until its outcome is saved (and,
-            # for an approved payment, until its hold is recorded).
-            await self.gateway.settled(current.id)
-            hold_settled = getattr(self.gateway.hold_manager, "settled", None)
-            if hold_settled is not None:
-                await hold_settled(current.id)
-            current = await self.store.get(action.id) or current
         if current.status in (ActionStatus.held, ActionStatus.approved):
             hold_manager = self.gateway.hold_manager
             if hold_manager is None:
                 return _step(current, StepResult.failed, "No hold manager."), current
             step = await hold_manager.cancel(current)
-            after = await self.store.get(current.id) or current
-            if not undoable(after) or after.status in (ActionStatus.held, ActionStatus.approved):
-                await self.store.drop_held_call(current.id)
-                return step, after
-            # Its approval was already running and it ran: undo it like any other call.
-            current = after
+            await self.store.drop_held_call(current.id)
+            return step, await self.store.get(current.id) or current
         if not undoable(current):
             return _step(current, StepResult.skipped, f"Action is {current.status.value}."), current
         if current.system is System.upstream:
             return _step(current, StepResult.skipped, "Upstream calls can't be undone."), current
+        adapter = self.gateway.by_system.get(current.system)
         if adapter is None:
             return _step(
                 current, StepResult.failed, f"No adapter for {current.system.value}."

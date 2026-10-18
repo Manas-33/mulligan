@@ -67,7 +67,6 @@ def make_action(n: int = 1, tool: str = "email_send") -> Action:
 class MemStore:
     def __init__(self) -> None:
         self.actions: dict[str, Action] = {}
-        self.dropped: list[str] = []
 
     async def get(self, action_id: str) -> Action | None:
         return self.actions.get(action_id)
@@ -77,9 +76,6 @@ class MemStore:
 
     async def list_by_status(self, *statuses: str) -> list[Action]:
         return [a for a in self.actions.values() if a.status.value in statuses]
-
-    async def drop_held_call(self, action_id: str) -> None:
-        self.dropped.append(action_id)
 
 
 class MemBus:
@@ -322,81 +318,3 @@ async def test_approve_when_running_raises_marks_failed_instead_of_500() -> None
     assert result.error == "RuntimeError: ToolNotFound('email_send')"
     assert store.actions[held.id].status is ActionStatus.failed
     assert bus.names() == ["action.held", "action.approved", "action.failed"]
-
-
-async def test_a_rewind_waits_for_an_approval_already_running() -> None:
-    import asyncio
-
-    hm, store, _, runner = manager()
-    held = await hm.hold(make_action(), HoldKind.email_outbox)
-    assert held.approval is not None
-    gate = asyncio.Event()
-    run = runner.run_held
-
-    async def slow_run(action_id: str) -> Action:
-        await gate.wait()
-        return await run(action_id)
-
-    runner.run_held = slow_run  # type: ignore[method-assign]
-    deciding = asyncio.create_task(hm.on_decision(held.id, decision(held.approval.code)))
-    await asyncio.sleep(0)
-    assert store.actions[held.id].status is ActionStatus.approved
-    cancelling = asyncio.create_task(hm.cancel(store.actions[held.id]))
-    await asyncio.sleep(0.01)
-    assert not cancelling.done()  # waits for the run instead of claiming nothing ran
-    gate.set()
-    await deciding
-    await cancelling
-    assert store.actions[held.id].status is ActionStatus.executed  # the rewind then undoes it
-
-
-async def test_a_failed_run_doesnt_overwrite_a_rewinds_reject() -> None:
-    hm, store, _, runner = manager()
-    held = await hm.hold(make_action(), HoldKind.email_outbox)
-    assert held.approval is not None
-
-    async def rejected_then_boom(action_id: str) -> Action:
-        a = store.actions[action_id]
-        await store.save(a.model_copy(update={"status": ActionStatus.rejected}))
-        raise RuntimeError("no stored arguments")
-
-    runner.run_held = rejected_then_boom  # type: ignore[method-assign]
-    result = await hm.on_decision(held.id, decision(held.approval.code))
-    assert result.status is ActionStatus.rejected
-
-
-async def test_expired_holds_and_repeated_wrong_codes_cant_be_decided() -> None:
-    hm, store, bus, runner = manager()
-    held = await hm.hold(make_action(1), HoldKind.email_outbox)
-    assert held.approval is not None
-    past = held.approval.model_copy(update={"expires_at": utcnow() - timedelta(seconds=1)})
-    await store.save(held.model_copy(update={"approval": past}))
-    with pytest.raises(NotHeld, match="expired"):
-        await hm.on_decision(held.id, decision(held.approval.code))
-
-    other = await hm.hold(make_action(2), HoldKind.email_outbox)
-    assert other.approval is not None
-    wrong = "0000" if other.approval.code != "0000" else "1111"
-    for _ in range(4):
-        with pytest.raises(WrongCode, match="does not match"):
-            await hm.on_decision(other.id, decision(wrong))
-    with pytest.raises(WrongCode, match="the hold is rejected"):
-        await hm.on_decision(other.id, decision(wrong))
-    assert store.actions[other.id].status is ActionStatus.rejected
-    with pytest.raises(NotHeld):
-        await hm.on_decision(other.id, decision(other.approval.code))
-    assert other.id in store.dropped and runner.ran == []
-
-
-async def test_rejected_and_expired_holds_drop_their_arguments() -> None:
-    hm, store, *_ = manager(ttl=timedelta(seconds=-1))
-    rejected = await hm.hold(make_action(1), HoldKind.email_outbox)
-    expired = await hm.hold(make_action(2), HoldKind.email_outbox)
-    assert rejected.approval is not None
-    store.actions[rejected.id] = rejected.model_copy(
-        update={"approval": rejected.approval.model_copy(update={"expires_at": None})}
-    )
-    await hm.on_decision(rejected.id, decision(rejected.approval.code, ApprovalDecision.reject))
-    await hm.release_due()
-    assert store.actions[expired.id].status is ActionStatus.expired
-    assert set(store.dropped) == {rejected.id, expired.id}

@@ -76,15 +76,7 @@ export function photonMessenger(projectId: string, apiKey: string): Messenger {
     async receivedSince(since) {
       const items = await list({ direction: "received", platform: "imessage", order: "asc", pageSize: 100, createdSince: since });
       return items
-        // Direct chats only: a group the line is in isn't where approvals happen.
-        .filter(
-          (m) =>
-            m.content?.type === "text" &&
-            m.space?.kind === "direct" &&
-            m.sentBy?.handle &&
-            m.space?.id &&
-            m.receivedBy?.id,
-        )
+        .filter((m) => m.content?.type === "text" && m.sentBy?.handle && m.space?.id && m.receivedBy?.id)
         .map((m) => ({
           id: m.id,
           createdAt: m.createdAt,

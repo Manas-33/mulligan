@@ -187,9 +187,6 @@ export const shortId = (id: string) => id.replace(/^[a-z]+_/, "").slice(-4).toLo
  * a human edit. */
 export const UNDOABLE = new Set<Action["status"]>(["executed", "held", "approved", "revert_failed"]);
 
-/** A call still running: a rewind waits for it to finish, then undoes it. */
-export const IN_FLIGHT = new Set<Action["status"]>(["pending", "executing"]);
-
 /** A call that failed but kept an undo recipe: its write may have landed before the error (say, a
  * lost reply from GitHub), so a rewind checks for the change and undoes it if it's there. */
 export const mayHaveLanded = (a: Action): boolean => !a.executed_at && !!a.inverse;
@@ -197,8 +194,7 @@ export const mayHaveLanded = (a: Action): boolean => !a.executed_at && !!a.inver
 /** Whether a rewind would pick this action up: it changed something (or may have), and an undo can
  * still do something about it. */
 export const isUndoable = (a: Action): boolean =>
-  a.reversibility.label !== "read_only" &&
-  (a.status === "failed" ? mayHaveLanded(a) : UNDOABLE.has(a.status) || IN_FLIGHT.has(a.status));
+  a.reversibility.label !== "read_only" && (a.status === "failed" ? mayHaveLanded(a) : UNDOABLE.has(a.status));
 
 /** Undoable actions created at or after `since`: what "Rewind to here" would take back. */
 export const undoableFrom = (actions: Action[], since: string): Action[] =>

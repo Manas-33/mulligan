@@ -7,8 +7,6 @@ import socket
 import threading
 from typing import Any
 
-import pytest
-
 from mulligan.holds.email import CORRECTION, EmailAdapter, Outgoing, SmtpMailer
 from mulligan.interfaces import ToolCall
 from mulligan.models import ActionStatus, StepResult, System
@@ -146,29 +144,3 @@ async def test_real_smtp_round_trip() -> None:
     server.close()
     assert len(ids) == 1
     assert "Subject: Hi" in received and "To: a@acme-widgets.test" in received
-
-
-async def test_cc_gets_one_copy() -> None:
-    mailer = FakeMailer()
-    adapter = EmailAdapter(mailer, sender="billing@acme-widgets.test")
-    call = email_call()
-    call = call.model_copy(update={"args": {**call.args, "cc": ["boss@acme-widgets.test"]}})
-    await adapter.execute(call, await adapter.capture_before(call))
-    assert [m.cc for _, m in mailer.sent] == [("boss@acme-widgets.test",), ()]
-
-
-async def test_a_send_that_stops_partway_keeps_a_correction_for_who_got_it() -> None:
-    from mulligan.holds.email import PartialSend
-    from mulligan.interfaces import WriteUncertain
-
-    class Partway(FakeMailer):
-        def send(self, sender: str, messages: list[Outgoing]) -> list[str]:
-            raise PartialSend(["a@acme-widgets.test"], ["<0@test>"], OSError("connection reset"))
-
-    adapter = EmailAdapter(Partway(), sender="billing@acme-widgets.test")
-    call = email_call()
-    with pytest.raises(WriteUncertain) as raised:
-        await adapter.execute(call, await adapter.capture_before(call))
-    assert "1 of 2" in str(raised.value)
-    assert raised.value.inverse.kind == CORRECTION
-    assert raised.value.inverse.payload["recipients"] == ["a@acme-widgets.test"]

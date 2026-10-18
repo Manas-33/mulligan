@@ -92,26 +92,10 @@ async def serve(settings: Settings) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    # httpx logs every request URL at INFO, and an upstream server's URL can carry its API key.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
     settings = Settings.from_env()
     if settings.sentry_dsn:
         sentry_sdk.init(**sentry_options(settings))
     asyncio.run(serve(settings))
-
-
-ARGUMENT_PREFIX = "mcp.request.argument."
-
-
-def scrub_tool_arguments(event: Any, _hint: Any) -> Any:
-    """Sentry's MCP integration attaches every tool argument (customer rows, email bodies) to
-    the transaction whatever send_default_pii says. Keep the keys, drop the values."""
-    trace = (event.get("contexts") or {}).get("trace") or {}
-    for span in [*(event.get("spans") or []), trace]:
-        data = span.get("data") or {}
-        for key in [k for k in data if str(k).startswith(ARGUMENT_PREFIX)]:
-            data[key] = "[scrubbed]"
-    return event
 
 
 def sentry_options(settings: Settings) -> dict[str, Any]:
@@ -122,10 +106,6 @@ def sentry_options(settings: Settings) -> dict[str, Any]:
         "environment": settings.sentry_environment,
         "traces_sample_rate": 1.0,
         "send_default_pii": False,
-        # Frames hold agent tokens (the MCP server's token map, Authorization headers) and call
-        # arguments; Sentry's scrubber doesn't look inside them.
-        "include_local_variables": False,
-        "before_send_transaction": scrub_tool_arguments,
         "enable_logs": True,
         "integrations": [
             LoggingIntegration(
