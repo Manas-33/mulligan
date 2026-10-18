@@ -1,5 +1,5 @@
-// Rewinding a round, as three full screens: the plan (a dry run, nothing changes), the live run
-// (objects fly back to the tee as rewind.step events land), and the proof (checksums per system).
+// Undoing a session, as three full screens: the preview (a dry run, nothing changes), the live run
+// (objects fly back as rewind.step events land), and the proof (checksums per system).
 
 import { useEffect, useRef, useState } from "react";
 import type { Client } from "../api/client.ts";
@@ -84,15 +84,15 @@ export function Rewind({ client, session, actions, live, from, onJob, onClose }:
   return (
     <div ref={top} className="rewind">
       <button className="link-button back" onClick={onClose}>
-        ← Back to the round
+        ← Back to the session
       </button>
       {error && !error.dryRun && (
         <p className="notice notice-bad" role="alert">
-          The rewind didn’t start: {problemText(error.problem)}{" "}
+          The undo didn’t start: {problemText(error.problem)}{" "}
           {error.problem.status ? "Nothing changed." : "If it did reach the gateway, its progress shows up here once the feed is back."}
         </p>
       )}
-      {!run && !plan && !error && <p className="quiet loading">Drawing up the plan…</p>}
+      {!run && !plan && !error && <p className="quiet loading">Working out what to undo…</p>}
       {!run && !plan && error?.dryRun && <PlanFailed problem={error.problem} busy={busy} onRetry={() => request(true)} />}
       {!run && plan && <Plan job={plan} actions={actions} from={from} busy={busy} onRun={() => request(false)} onClose={onClose} />}
       {run && run.status === "running" && <Running job={run} actions={actions} />}
@@ -124,11 +124,11 @@ function problemText(p: Problem): string {
 function PlanFailed({ problem, busy, onRetry }: { problem: Problem; busy: boolean; onRetry: () => void }) {
   return (
     <section className="plan" aria-labelledby="plan-title" role="alert">
-      <p className="meta">dry run · {problem.status ? `HTTP ${problem.status}` : "no answer"}</p>
+      <p className="meta">preview · {problem.status ? `HTTP ${problem.status}` : "no answer"}</p>
       <h1 id="plan-title" className="headline">
-        Couldn’t draw up the plan.
+        Couldn’t work out what to undo.
       </h1>
-      <p className="lede">The dry run didn’t come back: {problemText(problem)} Nothing has changed, and nothing will until you see a plan.</p>
+      <p className="lede">The preview didn’t come back: {problemText(problem)} Nothing has changed, and nothing will until you’ve seen what gets undone.</p>
       <div className="hero-actions">
         <button className="pill-button small" disabled={busy} onClick={onRetry}>
           {busy ? "Asking…" : "Try again"}
@@ -159,18 +159,18 @@ function Plan(props: {
   return (
     <section className="plan" aria-labelledby="plan-title">
       <p className="meta">
-        dry run · plan {shortId(job.id)} · {job.steps.length} steps, newest first
+        preview · {job.steps.length} steps, newest first
         {from && (
           <span className="back-to">
-            · back to {from.tool} at {new Date(from.created_at).toLocaleTimeString([], { hour12: false })}
+            · from {from.tool} at {new Date(from.created_at).toLocaleTimeString([], { hour12: false })}
           </span>
         )}
       </p>
       <div className="title-row">
         <h1 id="plan-title" className="headline">
-          Here’s the do-over.
+          Here’s what gets undone.
         </h1>
-        <span className="sticker sticker-mint tilt-right">nothing’s moved yet</span>
+        <span className="sticker sticker-mint tilt-right">nothing has changed yet</span>
       </div>
       <p className="lede">{planSentence(counts)}</p>
 
@@ -182,7 +182,7 @@ function Plan(props: {
         </PlanSection>
       ))}
       {held.length > 0 && (
-        <PlanSection system="mulligan" title="Held at the tee" count={held.length} caption="never ran">
+        <PlanSection system="mulligan" title="Waiting for approval" count={held.length} caption="never ran, gets refused">
           {held.map((s) => {
             const a = actions[s.action_id];
             return (
@@ -200,12 +200,12 @@ function Plan(props: {
 
       <footer className="plan-footer">
         <button className="pill-button big" disabled={busy || job.steps.length === 0} onClick={onRun}>
-          <RewindGlyph size={24} /> {busy ? "Starting…" : "Take the mulligan"}
+          <RewindGlyph size={24} /> {busy ? "Starting…" : "Undo it all"}
         </button>
         <button className="link-button" onClick={onClose}>
           Not now
         </button>
-        <p className="quiet right">Runs newest first. Every system gets checksummed when it’s done.</p>
+        <p className="quiet right">Runs newest first, then checks every system matches how it was before.</p>
       </footer>
     </section>
   );
@@ -297,9 +297,9 @@ function Running({ job, actions }: { job: RewindJob; actions: Record<string, Act
     <section className="running" aria-labelledby="running-title" aria-live="polite">
       <div className="running-hero">
         <div className="running-text">
-          <p className="meta">rewind {shortId(job.id)} · running</p>
+          <p className="meta">undo {shortId(job.id)} · running</p>
           <h1 id="running-title" className="headline">
-            Rewinding…
+            Undoing…
           </h1>
           <div className="counter-row">
             <span className="counter" aria-label={`${pending.length} left`}>
@@ -309,7 +309,7 @@ function Running({ job, actions }: { job: RewindJob; actions: Record<string, Act
                 </span>
               ))}
             </span>
-            <span>changes left to put back</span>
+            <span>changes left to undo</span>
           </div>
         </div>
         <div className="flight" aria-hidden>
@@ -330,7 +330,7 @@ function Running({ job, actions }: { job: RewindJob; actions: Record<string, Act
             ))}
             {doneSystems.length > 0 && <span className="sticker sticker-mint sticker-small">back · {done.length}</span>}
           </div>
-          <span className="tee-label quiet small">the tee: how things were before</span>
+          <span className="tee-label quiet small">back to how things were before</span>
         </div>
       </div>
       <Printout steps={job.steps} actions={actions} />
@@ -343,7 +343,7 @@ function Printout({ steps, actions }: { steps: RewindStep[]; actions: Record<str
   return (
     <div className="printout">
       <header className="section-head ruled">
-        <h2>What’s come back</h2>
+        <h2>Undone so far</h2>
         <span className="quiet">newest first</span>
       </header>
       <ol>
@@ -377,12 +377,12 @@ function Proof(props: { job: RewindJob; actions: Record<string, Action>; session
   const kept = job.steps.some((s) => s.kept_fields.length > 0);
   const systems = SYSTEM_ORDER.filter((s) => job.steps.some((x) => x.system === s) || job.verification[s]);
   const clean = job.status === "completed" && unfinished.length === 0;
-  const title = job.status === "failed" ? "The rewind stopped." : clean && allOk ? "Back on the tee." : "Mostly back.";
+  const title = job.status === "failed" ? "The undo stopped." : clean && allOk ? "Everything’s back." : "Mostly back.";
 
   return (
     <section className="proof" aria-labelledby="proof-title">
       <p className="meta center">
-        rewind {shortId(job.id)} · {job.status} · {job.steps.length} steps
+        undo {shortId(job.id)} · {job.status} · {job.steps.length} steps
       </p>
       <div className="title-row center">
         <h1 id="proof-title" className="headline">
@@ -398,7 +398,7 @@ function Proof(props: { job: RewindJob; actions: Record<string, Action>; session
         {job.error ??
           (unfinished.length
             ? `${unfinished.length} ${unfinished.length === 1 ? "change didn’t" : "changes didn’t"} come back. Everything else was put back and hashed again.`
-            : "Every system was hashed again and compared with how it looked before the agent, with any kept human edits on top.")}
+            : "Every system was checked against how it looked before the agent, with any kept human edits on top.")}
       </p>
       <div className="lined-up" aria-hidden>
         {systems.map((s, i) => (
@@ -438,9 +438,9 @@ function Proof(props: { job: RewindJob; actions: Record<string, Action>; session
           <header className="section-head ruled">
             <h2>In one line</h2>
           </header>
-          <p className="bubble">{rewindSummary(job, actions, `round ${shortId(session.id)}`)}</p>
+          <p className="bubble">{rewindSummary(job, actions, `session ${shortId(session.id)}`)}</p>
           <button className="pill-button small" onClick={onClose}>
-            Back to the round
+            Back to the session
           </button>
         </aside>
       </div>
@@ -453,7 +453,7 @@ function Unfinished({ steps, actions, stopped, onRetry }: { steps: RewindStep[];
   return (
     <div className="unfinished">
       <header className="section-head ruled">
-        <h2>Still out on the course</h2>
+        <h2>Not undone yet</h2>
         <span className="berry">{steps.length} left</span>
       </header>
       <ol>
@@ -471,10 +471,10 @@ function Unfinished({ steps, actions, stopped, onRetry }: { steps: RewindStep[];
       </ol>
       <div className="unfinished-actions">
         <button className="pill-button small" onClick={onRetry}>
-          <RewindGlyph size={16} /> Plan the rest again
+          <RewindGlyph size={16} /> Try the rest again
         </button>
         <span className="quiet small">
-          {stopped ? "The run stopped early." : "The rest of the run finished."} A new dry run only lists what’s still undoable.
+          {stopped ? "The run stopped early." : "The rest of the run finished."} A new preview only lists what can still be undone.
         </span>
       </div>
     </div>

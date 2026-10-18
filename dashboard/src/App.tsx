@@ -11,7 +11,7 @@ import { Rewind } from "./components/Rewind.tsx";
 import { Logo } from "./components/SystemObject.tsx";
 import { API_URL, DASHBOARD_TOKEN } from "./config.ts";
 import type { StreamStatus } from "./api/sse.ts";
-import { GatewayProblem, Loading, NoRounds } from "./components/States.tsx";
+import { GatewayProblem, Loading, NoSessions } from "./components/States.tsx";
 import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
 import type { Action, RewindJob } from "./types.ts";
 import { describeProblem, type Problem, shortId, undoable } from "./view.ts";
@@ -41,7 +41,7 @@ type Conn = "connecting" | StreamStatus;
 /** The REST snapshot: still coming, in, or failed (and why). */
 type Load = { state: "loading" } | { state: "ready" } | { state: "failed"; problem: Problem };
 
-/** What a rewind covers: the whole round, or back to (and including) one action. */
+/** What an undo covers: the whole session, or back to (and including) one action. */
 type Target = { from?: Action };
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -135,9 +135,10 @@ export function App() {
         <a className="brand" href="#/">
           <Logo /> Mulligan
         </a>
+        <span className="tagline">Records what your AI agent does, and undoes it.</span>
         {route === "dashboard" && sessions.length > 1 && (
           <label className="round-picker">
-            <span className="quiet">round</span>
+            <span className="quiet">session</span>
             <select
               value={current ?? ""}
               onChange={(e) => {
@@ -182,7 +183,7 @@ export function App() {
           ) : load.state === "failed" && !session ? (
             <GatewayProblem problem={load.problem} apiUrl={API_URL} onRetry={() => void fetchSnapshot()} retrying={retrying} />
           ) : !session ? (
-            <NoRounds />
+            <NoSessions />
           ) : rewinding ? (
             <Rewind
               client={client}

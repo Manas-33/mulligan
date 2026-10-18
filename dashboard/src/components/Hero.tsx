@@ -1,8 +1,8 @@
-// The top of a round: what the agent did, in one line, and the pile of things it touched. Reads
-// ("reading the green") stay quiet; shots, the actions that changed something, carry the numbers.
+// The top of a session: what the agent changed, in one line, and the pile of things it touched.
+// Reads changed nothing, so they get a quiet line underneath instead of the headline.
 
 import type { Action, Session, System } from "../types.ts";
-import { countBySystem, duration, laneCaption, plural, shortId, shotCounts, SYSTEM_ORDER } from "../view.ts";
+import { actionCounts, countBySystem, duration, laneCaption, plural, shortId, SYSTEM_ORDER } from "../view.ts";
 import { RewindGlyph, SystemObject } from "./SystemObject.tsx";
 
 // Where each object sits in the pile (percent of the pile box) and how it leans.
@@ -21,49 +21,52 @@ export function Hero(props: { session: Session; actions: Action[]; onRewind: () 
   const systems = SYSTEM_ORDER.filter((s) => counts[s]);
   const end = session.ended_at ?? actions[0]?.created_at ?? session.started_at;
   const rewound = session.status === "rewound";
-  const { reads, shots, left, rewound: back } = shotCounts(actions);
+  const { reads, changes, left, undone, refused } = actionCounts(actions);
 
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div className="hero-text">
         <p className="meta">
-          round {shortId(session.id)} · {session.agent.display_name}
+          session {shortId(session.id)} · {session.agent.display_name}
           {session.mode === "replay" && <span className="badge">replay</span>} · {duration(session.started_at, end)}
         </p>
         <h1 id="hero-title" className="headline">
           {actions.length === 0 ? (
-            <span className="line">Nothing on the card yet.</span>
+            <span className="line">Nothing recorded yet.</span>
           ) : (
             <>
-              {reads > 0 && <span className="line reads">The agent read the green {reads === 1 ? "once" : `${reads} times`}</span>}
+              <span className="line">The agent made {changes === 0 ? "no changes" : plural(changes, "change")}.</span>
               <span className="line">
-                {reads > 0 ? "and took" : "The agent took"} {shots === 0 ? "no shots" : plural(shots, "shot")}.
-              </span>
-              <span className="line">
-                {shots === 0 ? (
-                  "Nothing to take back."
+                {changes === 0 ? (
+                  "Nothing to undo."
                 ) : (
                   <>
-                    {rewound ? "You took the" : "Take a"} <span className="sticker sticker-sun">mulligan.</span>
+                    {rewound ? "Undone with a" : "Undo with a"} <span className="sticker sticker-sun">mulligan.</span>
                   </>
                 )}
               </span>
             </>
           )}
         </h1>
+        {reads > 0 && (
+          <p className="lede">
+            It also read data {reads === 1 ? "once" : `${reads} times`}. Reads change nothing, so there’s nothing to undo there.
+          </p>
+        )}
         <div className="hero-actions">
-          {shots > 0 && (left > 0 || back === 0) && (
+          {changes > 0 && (left > 0 || undone === 0) && (
             <button className="pill-button" onClick={onRewind} disabled={!canRewind}>
-              <RewindGlyph /> {left > 0 ? `Rewind ${plural(left, "shot")}` : "Rewind the round"}
+              <RewindGlyph /> {left > 0 ? `Undo ${plural(left, "change")}` : "Undo the session"}
             </button>
           )}
-          {back > 0 && (
-            <p className="rewound">
-              <span className="sticker sticker-mint">{plural(back, "shot")} rewound</span>
-              {reads > 0 && <span className="quiet">· {plural(reads, "read")} left as they were</span>}
+          {undone > 0 && (
+            <p className="undone">
+              <span className="sticker sticker-mint">{plural(undone, "change")} undone</span>
+              {refused > 0 && <span className="quiet">· {refused} refused before they ran</span>}
+              {reads > 0 && <span className="quiet">· {plural(reads, "read")} needed nothing</span>}
             </p>
           )}
-          {!canRewind && back === 0 && shots > 0 && <span className="quiet">Nothing left to undo here.</span>}
+          {!canRewind && undone === 0 && changes > 0 && <span className="quiet">Nothing left to undo here.</span>}
         </div>
       </div>
       <div className="pile" aria-hidden>

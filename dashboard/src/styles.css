@@ -68,6 +68,7 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 /* --- Nav --- */
 .nav { display: flex; align-items: center; gap: 20px; height: 80px; padding: 0 24px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; font-weight: 800; font-size: 24px; letter-spacing: -0.03em; }
+.tagline { font-size: 15px; color: var(--quiet); }
 .round-picker { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font-size: 14px; }
 .round-picker select {
   font: 400 14px var(--sans); color: var(--cream); background: rgba(0, 0, 0, 0.3);
@@ -75,7 +76,7 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 }
 .conn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border: 1px solid rgba(243, 234, 211, 0.18); border-radius: 999px; font: 13px var(--mono); }
 .round-picker + .conn { margin-left: 0; }
-.nav > .conn:nth-child(2) { margin-left: auto; }
+.tagline + .conn { margin-left: auto; }
 .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sun); }
 .conn-live .dot { background: var(--mint); }
 .conn-reconnecting .dot { animation: blink 1s steps(2) infinite; }
@@ -121,13 +122,13 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 .link-button:disabled { opacity: 0.5; cursor: default; }
 
 /* --- Hero --- */
-.hero { display: grid; grid-template-columns: minmax(0, 700px) minmax(0, 1fr); align-items: center; gap: 24px; padding: 64px 24px 56px; }
+.hero { display: grid; grid-template-columns: minmax(0, 740px) minmax(0, 1fr); align-items: center; gap: 24px; padding: 64px 24px 56px; }
 .hero-text { display: flex; flex-direction: column; gap: 24px; }
+.hero .headline { font-size: clamp(34px, 3.5vw, 50px); }
+.hero .lede { margin-top: -8px; font-size: 17px; color: var(--quiet); max-width: 560px; }
 .hero-actions { display: flex; align-items: center; gap: 22px; padding-top: 6px; }
-/* Reads changed nothing, so the headline says them quietly and lets the shots carry it. */
-.headline .reads { font-size: 0.57em; font-weight: 700; letter-spacing: -0.02em; color: var(--quiet); }
-.rewound { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; font-size: 17px; font-weight: 500; }
-.rewound .sticker { font-size: 19px; padding: 8px 16px 10px; border-radius: 12px; letter-spacing: -0.01em; transform: rotate(-2deg); }
+.undone { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; font-size: 17px; font-weight: 500; }
+.undone .sticker { font-size: 19px; padding: 8px 16px 10px; border-radius: 12px; letter-spacing: -0.01em; transform: rotate(-2deg); }
 .pile { --pile-scale: 1; position: relative; height: 380px; }
 .pile-item { position: absolute; display: flex; flex-direction: column; align-items: center; animation: float 6s ease-in-out infinite alternate; }
 .pile-item .sticker-small { position: absolute; top: -6px; left: 50%; transform: translateX(-30%) rotate(-5deg); }
@@ -176,6 +177,12 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 /* A read is a small faded dot: it looked at the green and changed nothing. */
 .bead.is-read { width: 8px; height: 8px; border-radius: 50%; opacity: 0.4; }
 .bead.is-read.is-selected { opacity: 1; background: color-mix(in srgb, var(--c) 45%, var(--card)); }
+/* The key under the lanes: what a dot, a bar and a flag mean. */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-top: 14px; }
+.legend li { display: inline-flex; align-items: center; gap: 8px; }
+.legend .bead { position: static; translate: none; cursor: default; height: 14px; width: 6px; border-radius: 3px; }
+.legend .bead.is-read { width: 8px; height: 8px; border-radius: 50%; }
+.legend .bead:hover { transform: none; }
 .playhead { position: absolute; top: -6px; bottom: 0; right: 14px; width: 2px; background: var(--cream); border-radius: 2px; }
 .playhead span { position: absolute; bottom: -10px; left: 50%; translate: -50% 0; padding: 0 6px; background: var(--cream); color: var(--ground); border-radius: 4px; font-size: 11px; font-weight: 700; }
 
@@ -318,6 +325,7 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 @media (max-width: 640px) {
   .app { padding: 0 16px 48px; }
   .nav { height: auto; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
+  .tagline { order: 5; flex-basis: 100%; font-size: 14px; }
   .round-picker { margin-left: 0; min-width: 0; }
   .round-picker select { max-width: 200px; text-overflow: ellipsis; }
   .pile { --pile-scale: 0.62; height: 230px; margin-right: 24px; }

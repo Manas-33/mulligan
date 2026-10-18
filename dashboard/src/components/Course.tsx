@@ -1,10 +1,10 @@
-// "The round so far": one lane per system, a bead per action placed by time, held actions as red
-// flags, reads as small faded dots, and the selected action described underneath.
+// "What the agent did": one lane per system, a bead per action placed by time, held actions as red
+// flags, reads as small faded dots, a legend for all three, and the selected action underneath.
 
 import { useState } from "react";
 import { SENTRY_TRACE_URL } from "../config.ts";
 import type { Action, Session, System } from "../types.ts";
-import { isRead, laneCaption, position, shortId, SYSTEM_ORDER, systemName, undoableFrom } from "../view.ts";
+import { isRead, labelText, laneCaption, position, shortId, SYSTEM_ORDER, systemName, undoableFrom } from "../view.ts";
 import { DitherField } from "./Dither.tsx";
 import { Flag, RewindGlyph, SystemObject } from "./SystemObject.tsx";
 
@@ -24,13 +24,13 @@ export function Course({ session, actions, onRewindTo }: CourseProps) {
     <section className="course card" aria-labelledby="course-title">
       <DitherField className="course-dither" />
       <header className="section-head">
-        <h2 id="course-title">The round so far</h2>
+        <h2 id="course-title">What the agent did</h2>
         <span className="mono quiet">
           {clock(start)} → {session.ended_at ? clock(end) : "now"}
         </span>
       </header>
       {systems.length === 0 ? (
-        <p className="quiet empty">No shots yet. Actions show up here as the agent makes them.</p>
+        <p className="quiet empty">Nothing yet. Actions show up here as the agent makes them.</p>
       ) : (
         <div className="lanes-wrap">
         <ol className="lanes">
@@ -53,6 +53,7 @@ export function Course({ session, actions, onRewindTo }: CourseProps) {
         )}
         </div>
       )}
+      {systems.length > 0 && <Legend />}
       {selected && (
         <Selected action={selected} undoes={undoableFrom(actions, selected.created_at).length} onRewindTo={() => onRewindTo(selected)} />
       )}
@@ -94,16 +95,32 @@ function Lane(props: { system: System; actions: Action[]; start: string; end: st
   );
 }
 
+function Legend() {
+  return (
+    <ul className="legend quiet small" aria-label="Key">
+      <li>
+        <span className="bead bead-postgres is-read" aria-hidden /> read, nothing to undo
+      </li>
+      <li>
+        <span className="bead bead-postgres" aria-hidden /> change, can be undone
+      </li>
+      <li>
+        <Flag size={14} /> waiting for your approval
+      </li>
+    </ul>
+  );
+}
+
 function Selected({ action, undoes, onRewindTo }: { action: Action; undoes: number; onRewindTo: () => void }) {
   const time = new Date(action.created_at).toLocaleTimeString([], { hour12: false });
   const read = isRead(action);
-  const why = read ? "Just reading the green. Nothing changed, so there’s nothing to rewind." : (action.explanation ?? action.reversibility.reason);
+  const why = read ? "A read. It changed nothing, so there’s nothing to undo." : (action.explanation ?? action.reversibility.reason);
   return (
     <div className="selected" aria-live="polite">
       <SystemObject system={action.system} size={52} />
       <div className="selected-body">
         <p className="mono quiet">
-          #{shortId(action.id)} · {time} · {action.reversibility.label.replace("_", " ")}
+          #{shortId(action.id)} · {time} · {labelText(action.reversibility.label)}
           {action.upstream_server && <span className="badge badge-berry">not undoable</span>}
           {action.sentry_trace_id && (
             <a className="trace" href={SENTRY_TRACE_URL + action.sentry_trace_id} target="_blank" rel="noreferrer">
@@ -121,7 +138,7 @@ function Selected({ action, undoes, onRewindTo }: { action: Action; undoes: numb
       {!read && (
         <div className="rewind-to">
           <button className="pill-button small" disabled={undoes === 0} onClick={onRewindTo}>
-            <RewindGlyph size={16} /> Rewind to here
+            <RewindGlyph size={16} /> Undo from here
           </button>
           <span className="quiet small">
             {undoes === 0 ? "Nothing to undo from here." : undoes === 1 ? "Undoes just this one." : `Undoes this and the ${undoes - 1} after it.`}
@@ -139,7 +156,7 @@ function PaymentHold({ releaseAt }: { releaseAt: string }) {
     <p className="quiet">
       {captured ? "Captured at " : "Only authorized. It captures at "}
       {at.toLocaleTimeString()}
-      {captured ? ", so a rewind now refunds it." : " unless you rewind first."}
+      {captured ? ", so undoing it now refunds it." : " unless you undo it first."}
     </p>
   );
 }

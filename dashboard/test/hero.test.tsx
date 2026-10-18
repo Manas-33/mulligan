@@ -26,28 +26,27 @@ const text = (s: Session, actions: Action[], canRewind = true) =>
     .trim();
 
 describe("Hero", () => {
-  it("says the reads quietly and counts only the shots", () => {
+  it("counts only the changes, and says the reads quietly underneath", () => {
     const t = text(session(), [...reads(7), action("reversible")]);
-    expect(t).toContain("The agent read the green 7 times and took 1 shot.");
-    expect(t).toContain("Rewind 1 shot");
+    expect(t).toContain("The agent made 1 change. Undo with a mulligan.");
+    expect(t).toContain("It also read data 7 times. Reads change nothing");
+    expect(t).toContain("Undo 1 change");
   });
   it("reads once, and leaves the reads out when there were none", () => {
-    expect(text(session(), [...reads(1), action("reversible"), action("compensable", "held")])).toContain(
-      "The agent read the green once and took 2 shots.",
-    );
-    const t = text(session(), [action("reversible")]);
-    expect(t).toContain("The agent took 1 shot.");
-    expect(t).not.toContain("read the green");
+    const t = text(session(), [...reads(1), action("reversible"), action("compensable", "held")]);
+    expect(t).toContain("The agent made 2 changes. Undo with a mulligan.");
+    expect(t).toContain("It also read data once.");
+    expect(text(session(), [action("reversible")])).not.toContain("read data");
   });
-  it("has nothing to take back after only reads", () => {
+  it("has nothing to undo after only reads", () => {
     const t = text(session(), reads(3), false);
-    expect(t).toContain("The agent read the green 3 times and took no shots. Nothing to take back.");
-    expect(t).not.toContain("Rewind");
+    expect(t).toContain("The agent made no changes. Nothing to undo.");
+    expect(t).not.toContain("Undo ");
   });
-  it("says what a rewind took back and that the reads stayed put", () => {
+  it("says what an undo took back and that the reads needed nothing", () => {
     const t = text(session("rewound"), [...reads(7), action("reversible", "reverted")], false);
-    expect(t).toContain("You took the mulligan.");
-    expect(t).toContain("1 shot rewound · 7 reads left as they were");
-    expect(t).not.toContain("Rewind 1 shot");
+    expect(t).toContain("Undone with a mulligan.");
+    expect(t).toContain("1 change undone · 7 reads needed nothing");
+    expect(t).not.toContain("Undo 1 change");
   });
 });

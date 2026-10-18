@@ -9,7 +9,8 @@ import {
   planSentence,
   position,
   rewindSummary,
-  shotCounts,
+  actionCounts,
+  labelText,
   showValue,
   stepKind,
   timeLeft,
@@ -120,6 +121,7 @@ describe("formatting", () => {
   it("counts reads apart from the writes", () => {
     expect(laneCaption("postgres", [action({}), read({}), read({}), action({ status: "held" })])).toBe("1 write · 2 reads · 1 held");
     expect(laneCaption("mulligan", [read({})])).toBe("1 read");
+    expect(laneCaption("email", [action({ status: "rejected" })])).toBe("1 refused");
   });
 });
 
@@ -145,17 +147,25 @@ describe("undoableFrom and reads", () => {
   });
 });
 
-describe("shotCounts", () => {
-  it("splits reads from shots, counting held ones as shots", () => {
+describe("actionCounts", () => {
+  it("splits reads from changes, counting held ones as changes", () => {
     const list = [read({}), read({}), read({}), action({}), action({ status: "held" })];
-    expect(shotCounts(list)).toEqual({ reads: 3, shots: 2, left: 2, rewound: 0 });
+    expect(actionCounts(list)).toEqual({ reads: 3, changes: 2, left: 2, undone: 0, refused: 0 });
   });
-  it("counts what a rewind took back and leaves the reads alone", () => {
+  it("counts what an undo took back and leaves the reads alone", () => {
     const list = [read({}), action({ status: "reverted" }), action({ status: "conflict" }), action({ status: "rejected" })];
-    expect(shotCounts(list)).toEqual({ reads: 1, shots: 3, left: 1, rewound: 2 });
+    expect(actionCounts(list)).toEqual({ reads: 1, changes: 3, left: 1, undone: 2, refused: 1 });
   });
-  it("handles a round of only reads", () => {
-    expect(shotCounts([read({}), read({})])).toEqual({ reads: 2, shots: 0, left: 0, rewound: 0 });
+  it("handles a session of only reads", () => {
+    expect(actionCounts([read({}), read({})])).toEqual({ reads: 2, changes: 0, left: 0, undone: 0, refused: 0 });
+  });
+});
+
+describe("labelText", () => {
+  it("says the reversibility label in plain words", () => {
+    expect(labelText("read_only")).toBe("read only");
+    expect(labelText("compensable")).toBe("can be offset, not undone");
+    expect(labelText("irreversible")).toBe("can't be undone");
   });
 });
 
