@@ -6,7 +6,7 @@ import pytest
 
 from mulligan import services
 from mulligan.classify import RulesClassifier, create_classifier
-from mulligan.classify.rules import first_word
+from mulligan.classify.rules import first_word, write_verb
 from mulligan.interfaces import ToolAnnotations, UpstreamToolSchema
 from mulligan.models import ReversibilityLabel, ReversibilitySource
 
@@ -14,7 +14,10 @@ gate = RulesClassifier()
 
 
 def tool(
-    name: str, description: str | None = None, annotations: ToolAnnotations | None = None
+    name: str,
+    description: str | None = None,
+    annotations: ToolAnnotations | None = None,
+    inputs: tuple[str, ...] = (),
 ) -> UpstreamToolSchema:
     return UpstreamToolSchema(
         server="slack",
@@ -22,6 +25,7 @@ def tool(
         exposed_name=f"upstream__slack__{name}",
         description=description,
         annotations=annotations,
+        input_schema={"type": "object", "properties": {k: {"type": "string"} for k in inputs}},
     )
 
 
@@ -62,7 +66,9 @@ def test_first_word(name: str, word: str) -> None:
     assert first_word(name) == word
 
 
-@pytest.mark.parametrize("name", ["getUser", "search_issues", "fetch-page", "describe_table"])
+@pytest.mark.parametrize(
+    "name", ["getUser", "search_issues", "fetch-page", "describe_table", "get_user_settings"]
+)
 def test_read_verbs_without_writes_run(name: str) -> None:
     assert label(tool(name, "Returns details.")) is ReversibilityLabel.read_only
 
@@ -77,6 +83,13 @@ def test_read_verbs_without_writes_run(name: str) -> None:
         (tool("list_items", "List.", ToolAnnotations(readOnlyHint=False)), "not read-only"),
         (tool("get_item", "Get.", ToolAnnotations(destructiveHint=True)), "destructive"),
         (tool("listing", "Returns listings."), "doesn't start with a read verb"),
+        (tool("fetch_and_archive", "Fetches mail."), "also says archive"),
+        (tool("get_or_create_user", "Returns a user."), "also says create"),
+        (tool("lookup", "Deletes stale keys."), "description mentions a write (delete)"),
+        (tool("find", "Finds rows; archived ones are purged."), "archive, purge"),
+        (tool("query_db", "Runs it.", inputs=("sql",)), "description mentions a write (run)"),
+        (tool("query_db", "Returns rows.", inputs=("sql",)), "free-form sql"),
+        (tool("describe", "Returns rows.", inputs=("Mutation",)), "free-form Mutation"),
     ],
 )
 def test_anything_else_is_held(t: UpstreamToolSchema, reason_part: str) -> None:
@@ -88,3 +101,21 @@ def test_anything_else_is_held(t: UpstreamToolSchema, reason_part: str) -> None:
 def test_core_picks_up_the_rules_gate() -> None:
     assert isinstance(create_classifier(), RulesClassifier)
     assert isinstance(services.make_classifier(), RulesClassifier)
+
+
+@pytest.mark.parametrize(
+    ("word", "verb"),
+    [
+        ("archives", "archive"),
+        ("deleted", "delete"),
+        ("creating", "create"),
+        ("running", "run"),
+        ("submitted", "submit"),
+        ("posts", "post"),
+        ("settings", None),
+        ("address", None),
+        ("channels", None),
+    ],
+)
+def test_write_verb_inflections(word: str, verb: str | None) -> None:
+    assert write_verb(word) == verb

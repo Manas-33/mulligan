@@ -59,6 +59,8 @@ def build_where(
             parts.append(sql.SQL(tmpl).format(c, arr))
             params.append(Jsonb(f["value"]))
         elif op in ("like", "ilike"):
+            if not isinstance(f.get("value"), str):
+                raise ToolError(f"{op} needs a string pattern")
             parts.append(sql.SQL("{}::text {} %s::text").format(c, sql.SQL(op.upper())))
             params.append(str(f.get("value")))
         elif op in ("is_null", "is_not_null"):
@@ -161,6 +163,13 @@ async def soft_drop(conn: AsyncConnection[Any], t: Table, action_id: str) -> dic
         [t.oid, t.oid],
     )
     views = [r["view"] for r in await cur.fetchall()]
+    # Only the views the read-only role can read now get their grant taken away and given back.
+    cur = await conn.execute(
+        "SELECT v FROM unnest(%s::text[]) AS v"
+        " WHERE has_table_privilege('mulligan_ro', v::regclass, 'SELECT')",
+        [views],
+    )
+    ro_views = [r["v"] for r in await cur.fetchall()]
     cur = await conn.execute("SELECT obj_description(%s::oid, 'pg_class') AS note", [t.oid])
     note: Any = await cur.fetchone()
     renamed = []
@@ -173,7 +182,7 @@ async def soft_drop(conn: AsyncConnection[Any], t: Table, action_id: str) -> dic
             )
         )
         renamed.append({"kind": kw.lower(), "name": d["name"], "trash_name": new})
-    for view in views:
+    for view in ro_views:
         await conn.execute(sql.SQL("REVOKE SELECT ON {} FROM mulligan_ro").format(sql.SQL(view)))
     await conn.execute(
         sql.SQL("ALTER TABLE {} RENAME TO {}").format(t.ident, sql.Identifier(trash_table))
@@ -204,6 +213,7 @@ async def soft_drop(conn: AsyncConnection[Any], t: Table, action_id: str) -> dic
         "renamed": renamed,
         "inbound_fks": inbound,
         "dependent_views": views,
+        "ro_views": ro_views,
         "comment": note["note"],  # put back on undrop
     }
 

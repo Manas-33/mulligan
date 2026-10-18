@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import pytest
 from mcp import Client
 
-from mulligan.interfaces import Classifier, UpstreamToolSchema
+from mulligan.interfaces import Classifier, ToolCall, UpstreamToolSchema
 from mulligan.log.events import EventBus
 from mulligan.log.store import LogStore
 from mulligan.mcp_server.server import build_mcp
@@ -27,6 +28,7 @@ from mulligan.models import (
     RewindScope,
     SessionMode,
     StepResult,
+    System,
 )
 from mulligan.services import Services, assemble
 from mulligan.settings import Settings
@@ -84,6 +86,35 @@ async def test_discover_keeps_original_names_and_hints() -> None:
 async def test_unreachable_upstream_is_skipped() -> None:
     adapter = UpstreamAdapter({"gone": "http://127.0.0.1:9/mcp"})
     assert await adapter.discover() == {}
+
+
+async def test_an_upstream_that_never_answers_times_out() -> None:
+    class Stuck:
+        async def __aenter__(self) -> Stuck:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def call_tool(self, name: str, args: dict[str, Any]) -> Any:
+            await asyncio.sleep(10)
+
+    adapter = UpstreamAdapter({"slack": "http://unused"}, connect=lambda _: Stuck(), timeout_s=0.05)  # type: ignore[arg-type,return-value]
+    name = exposed_name("slack", "post_message")
+    adapter.schemas[name] = UpstreamToolSchema(
+        server="slack", name="post_message", exposed_name=name, input_schema={}
+    )
+    call = ToolCall(
+        action_id="act_" + "0" * 26,
+        session_id="ses_" + "0" * 26,
+        agent=AGENT,
+        tool=name,
+        system=System.upstream,
+        args={},
+        upstream_server="slack",
+    )
+    with pytest.raises(TimeoutError, match="didn't answer within 0.05 s"):
+        await adapter.execute(call, await adapter.capture_before(call))
 
 
 @pytest.fixture
@@ -159,3 +190,30 @@ async def test_mcp_server_lists_upstream_tools_with_their_schema(upstream_svc: A
     assert post.description and post.description.startswith("[via slack; held unless read-only]")
     assert set(post.input_schema["properties"]) == {"channel", "text"}
     assert "pg_delete_rows" not in tools  # no Postgres adapter in this gateway
+
+
+async def test_the_timeout_holds_with_the_real_mcp_client() -> None:
+    from mcp.server import MCPServer
+
+    stuck = MCPServer("stuck")
+
+    @stuck.tool(name="wait_forever", description="Never answers.")
+    async def wait_forever() -> str:
+        await asyncio.sleep(30)
+        return "late"
+
+    adapter = UpstreamAdapter({"stuck": stuck}, timeout_s=0.5)
+    await adapter.discover()
+    name = exposed_name("stuck", "wait_forever")
+    call = ToolCall(
+        action_id="act_" + "0" * 26,
+        session_id="ses_" + "0" * 26,
+        agent=AGENT,
+        tool=name,
+        system=System.upstream,
+        args={},
+        upstream_server="stuck",
+    )
+    # A TimeoutError (an Exception the core logs on the action), not a CancelledError.
+    with pytest.raises(TimeoutError, match="didn't answer"):
+        await adapter.execute(call, await adapter.capture_before(call))

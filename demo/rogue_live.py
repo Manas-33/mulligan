@@ -58,61 +58,65 @@ async def run_live(recordings: Path) -> Path:
     claude = anthropic.AsyncAnthropic(api_key=key) if key else anthropic.AsyncAnthropic()
     calls: list[dict[str, Any]] = []
     started = time.monotonic()
-    async with httpx2.AsyncClient(
-        headers={"Authorization": f"Bearer {token_for('rogue')}"},
-        timeout=httpx2.Timeout(30.0, read=120.0),
-    ) as http:
-        async with Client(streamable_http_client(mcp_url(), http_client=http)) as mcp:
-            tools = [to_anthropic_tool(t) for t in (await mcp.list_tools()).tools]
-            print(f"live: {MODEL} with {len(tools)} Mulligan tools")
-            messages: list[dict[str, Any]] = [{"role": "user", "content": TASK}]
-            for _ in range(MAX_TURNS):
-                response = await claude.beta.messages.create(
-                    model=MODEL,
-                    max_tokens=16000,
-                    tools=tools,
-                    messages=messages,
-                    betas=["server-side-fallback-2026-07-01"],
-                    fallbacks="default",
-                )
-                if response.stop_reason == "refusal":
-                    print(f"live: the model declined ({response.stop_details})")
-                    break
-                messages.append({"role": "assistant", "content": response.content})
-                uses = [b for b in response.content if b.type == "tool_use"]
-                if response.stop_reason != "tool_use" or not uses:
-                    final = " ".join(b.text for b in response.content if b.type == "text")
-                    print(f"live: done. {final[:500]}")
-                    break
-                results = []
-                for use in uses:
-                    t_ms = int((time.monotonic() - started) * 1000)
-                    result = await mcp.call_tool(use.name, dict(use.input))
-                    status = (result.structured_content or {}).get("status", "error")
-                    print(f"  {status:<9}{use.name}: {first_line(result)}")
-                    calls.append({"t_ms": t_ms, "tool": use.name, "args": dict(use.input)})
-                    results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": use.id,
-                            "content": tool_text(result)[:20_000],
-                            "is_error": bool(result.is_error),
-                        }
+    # Every call so far already reached the systems: keep the recording even if the run
+    # stops partway (an overloaded model, a dropped connection, Ctrl-C).
+    try:
+        async with httpx2.AsyncClient(
+            headers={"Authorization": f"Bearer {token_for('rogue')}"},
+            timeout=httpx2.Timeout(30.0, read=120.0),
+        ) as http:
+            async with Client(streamable_http_client(mcp_url(), http_client=http)) as mcp:
+                tools = [to_anthropic_tool(t) for t in (await mcp.list_tools()).tools]
+                print(f"live: {MODEL} with {len(tools)} Mulligan tools")
+                messages: list[dict[str, Any]] = [{"role": "user", "content": TASK}]
+                for _ in range(MAX_TURNS):
+                    response = await claude.beta.messages.create(
+                        model=MODEL,
+                        max_tokens=16000,
+                        tools=tools,
+                        messages=messages,
+                        betas=["server-side-fallback-2026-07-01"],
+                        fallbacks="default",
                     )
-                messages.append({"role": "user", "content": results})
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = recordings / f"{stamp}.json"
-    out.write_text(
-        json.dumps(
-            {
-                "name": stamp,
-                "description": f"Live run of {MODEL} through Mulligan.",
-                "task": TASK,
-                "calls": calls,
-            },
-            indent=2,
+                    if response.stop_reason == "refusal":
+                        print(f"live: the model declined ({response.stop_details})")
+                        break
+                    messages.append({"role": "assistant", "content": response.content})
+                    uses = [b for b in response.content if b.type == "tool_use"]
+                    if response.stop_reason != "tool_use" or not uses:
+                        final = " ".join(b.text for b in response.content if b.type == "text")
+                        print(f"live: done. {final[:500]}")
+                        break
+                    results = []
+                    for use in uses:
+                        t_ms = int((time.monotonic() - started) * 1000)
+                        result = await mcp.call_tool(use.name, dict(use.input))
+                        status = (result.structured_content or {}).get("status", "error")
+                        print(f"  {status:<9}{use.name}: {first_line(result)}")
+                        calls.append({"t_ms": t_ms, "tool": use.name, "args": dict(use.input)})
+                        results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": use.id,
+                                "content": tool_text(result)[:20_000],
+                                "is_error": bool(result.is_error),
+                            }
+                        )
+                    messages.append({"role": "user", "content": results})
+    finally:
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        out = recordings / f"{stamp}.json"
+        out.write_text(
+            json.dumps(
+                {
+                    "name": stamp,
+                    "description": f"Live run of {MODEL} through Mulligan.",
+                    "task": TASK,
+                    "calls": calls,
+                },
+                indent=2,
+            )
+            + "\n"
         )
-        + "\n"
-    )
-    print(f"live: recorded {len(calls)} calls to {out}")
+        print(f"live: recorded {len(calls)} calls to {out}")
     return out

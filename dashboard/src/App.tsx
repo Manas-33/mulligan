@@ -70,7 +70,11 @@ export function App() {
   const fetchSnapshot = useCallback(async () => {
     setRetrying(true);
     try {
-      const [sessions, actions] = await Promise.all([client.listSessions(), client.listActions()]);
+      // The newest actions: without order and limit the gateway answers with the oldest 200.
+      const [sessions, actions] = await Promise.all([
+        client.listSessions(),
+        client.listActions({ order: "desc", limit: "1000" }),
+      ]);
       dispatch({ type: "snapshot", sessions, actions });
       setLoad({ state: "ready" });
     } catch (e) {

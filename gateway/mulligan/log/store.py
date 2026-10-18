@@ -247,9 +247,9 @@ class LogStore:
     # --- demo -------------------------------------------------------------------------------
 
     async def clear(self) -> None:
-        """Wipe the log (demo reset only)."""
+        """Wipe the log (demo reset only). Event seq numbers keep counting up, so an open
+        dashboard (and its Last-Event-ID on reconnect) still takes the events that follow."""
         async with self.pool.connection() as conn:
             await conn.execute(
                 "TRUNCATE sessions, actions, held_calls, action_checksums, rewind_jobs, events"
-                " RESTART IDENTITY"
             )

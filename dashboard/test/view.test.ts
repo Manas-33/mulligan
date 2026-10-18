@@ -148,6 +148,13 @@ describe("undoableFrom", () => {
     expect(undoableFrom([read, kept], "2000-01-01T00:00:00Z")).toEqual([]);
   });
 
+  it("matches the gateway: a call still running is waited for and undone", () => {
+    expect(isUndoable(action({ status: "pending" }))).toBe(true);
+    expect(isUndoable(action({ status: "executing" }))).toBe(true);
+    const read = { label: "read_only", source: "policy", reason: null } as const;
+    expect(isUndoable(action({ status: "executing", reversibility: read }))).toBe(false);
+  });
+
   it("matches the gateway: a failed undo step is tried again", () => {
     expect(isUndoable(action({ status: "revert_failed" }))).toBe(true);
   });

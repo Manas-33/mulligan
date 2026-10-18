@@ -87,13 +87,23 @@ async def _configure(conn: AsyncConnection[Any]) -> None:
     set_json_loads(partial(json.loads, parse_float=Decimal), conn)
 
 
-async def open_pg_pool(url: str, *, max_size: int = 5) -> AsyncConnectionPool:
+async def _reset_session(conn: AsyncConnection[Any]) -> None:
+    """Agents' SQL runs on the read-only pool: undo any session state it left (a set_config
+    that wasn't local, an advisory lock) before the connection serves the next agent."""
+    await conn.execute("RESET ALL")
+    await conn.execute("SELECT pg_advisory_unlock_all()")
+
+
+async def open_pg_pool(
+    url: str, *, max_size: int = 5, reset_sessions: bool = False
+) -> AsyncConnectionPool:
     pool: AsyncConnectionPool = AsyncConnectionPool(
         url,
         min_size=1,
         max_size=max_size,
         kwargs={"row_factory": dict_row, "autocommit": True, "options": CONN_OPTIONS},
         configure=_configure,
+        reset=_reset_session if reset_sessions else None,
         open=False,
     )
     await pool.open(wait=True, timeout=30)
@@ -121,7 +131,7 @@ class PostgresAdapter(Adapter):
     @classmethod
     async def open(cls, settings: Settings) -> PostgresAdapter:
         pool = await open_pg_pool(settings.prod_db_url)
-        ro_pool = await open_pg_pool(settings.prod_db_readonly_url, max_size=3)
+        ro_pool = await open_pg_pool(settings.prod_db_readonly_url, max_size=3, reset_sessions=True)
         return cls(pool, ro_pool, settings)
 
     async def close(self) -> None:
