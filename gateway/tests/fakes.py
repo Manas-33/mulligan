@@ -147,8 +147,11 @@ class FakeTableAdapter(Adapter):
         total = sum(row_hash(i, r) for i, r in self.rows.items()) % MOD
         return f"{total:064x}"
 
-    async def expected_checksum(self, pre: str, kept: list[FieldChange]) -> str:
+    async def expected_checksum(self, pre: str, steps: list[RewindStep]) -> str:
         total = int(pre, 16)
+        kept = [
+            c for s in steps for c in s.changes if c.outcome is FieldChangeOutcome.keep_human_edit
+        ]
         for change in kept:
             parts = change.field.split(":", 1)[1].split("/")
             row_id = int(parts[1])

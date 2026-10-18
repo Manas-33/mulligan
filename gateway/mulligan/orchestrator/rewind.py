@@ -15,7 +15,6 @@ from mulligan.models import (
     ActionStatus,
     ChecksumVerifiedData,
     EventName,
-    FieldChangeOutcome,
     ReversibilityLabel,
     RewindJob,
     RewindJobStatus,
@@ -229,14 +228,8 @@ class Rewinder:
             adapter = self.gateway.by_system.get(System(system))
             expected, actual = check.expected, None
             if adapter is not None:
-                kept = [
-                    change
-                    for step in job.steps
-                    if step.system.value == system
-                    for change in step.changes
-                    if change.outcome is FieldChangeOutcome.keep_human_edit
-                ]
-                expected = await adapter.expected_checksum(check.expected, kept)
+                steps = [s for s in job.steps if s.system.value == system]
+                expected = await adapter.expected_checksum(check.expected, steps)
                 actual = await adapter.checksum()
             ok = actual is not None and actual == expected
             verification[system] = SystemVerification(expected=expected, actual=actual, ok=ok)
