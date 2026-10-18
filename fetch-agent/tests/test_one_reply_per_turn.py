@@ -44,6 +44,7 @@ def guardian(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     monkeypatch.setattr(module, "logic", GuardianLogic(FakeAPI()))  # type: ignore[arg-type]
     module.pending.clear()
+    module.seen_messages.clear()
     return module
 
 
@@ -81,3 +82,29 @@ async def test_a_task_gets_exactly_one_chat_message_the_report(guardian: Any) ->
     assert kinds == ["TextContent", "MetadataContent"]
     payload = json.loads(report.content[1].metadata["card_payload"])
     assert payload["approve_cta"]["label"] == "Rewind"
+
+
+async def test_a_repeated_message_is_acknowledged_but_handled_once(guardian: Any) -> None:
+    guardian.logic.last_session["user1"] = DELETE["session_id"]
+    message = chat("rewind")
+    ctx = FakeContext()
+    await guardian.on_chat(ctx, "user1", message)
+    await guardian.on_chat(ctx, "user1", message)
+    acks = [m for _, m in ctx.sent if isinstance(m, ChatAcknowledgement)]
+    assert len(acks) == 2 and len(ctx.chats()) == 1
+    assert len(guardian.logic.api.rewound) == 1
+
+
+async def test_a_message_without_text_gets_no_reply(guardian: Any) -> None:
+    ctx = FakeContext()
+    await guardian.on_chat(ctx, "user1", chat("   "))
+    assert ctx.chats() == []
+
+
+def test_every_message_has_non_empty_text(guardian: Any) -> None:
+    from mulligan_fetch.guardian_logic import Reply
+
+    message = guardian.to_message(Reply("", end_session=True))
+    texts = [c.text for c in message.content if isinstance(c, TextContent)]
+    assert texts == ["Done."]
+    assert [type(c).__name__ for c in message.content] == ["TextContent", "EndSessionContent"]

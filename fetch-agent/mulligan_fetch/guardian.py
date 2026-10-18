@@ -6,6 +6,7 @@ the worker, reports what Mulligan recorded and held, and rewinds on request.
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -44,12 +45,18 @@ guardian = Agent(
 worker_address = Identity.from_seed(config.worker_seed, 0).address
 logic = GuardianLogic(MulliganAPI(config.api_url, config.service_token))
 pending: dict[str, str] = {}  # request id -> chat sender
+# ASI:One can deliver the same chat message again while a slow reply (a rewind) is running;
+# acknowledge repeats but act once.
+seen_messages: deque[str] = deque(maxlen=500)
 chat = Protocol(spec=chat_protocol_spec)
 
 
 def to_message(reply: Reply) -> ChatMessage:
+    """The turn's one chat message: always non-empty text, with the card and the end-session
+    marker riding on it (ASI:One shows a message without text as an empty bubble)."""
+    text = reply.text.strip() or "Done."
     content: list[TextContent | MetadataContent | EndSessionContent] = [
-        TextContent(type="text", text=reply.text)
+        TextContent(type="text", text=text)
     ]
     if reply.card:
         content.append(MetadataContent(type="metadata", metadata=reply.card))
@@ -63,7 +70,13 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage) -> None:
     await ctx.send(
         sender, ChatAcknowledgement(timestamp=datetime.now(UTC), acknowledged_msg_id=msg.msg_id)
     )
+    if str(msg.msg_id) in seen_messages:
+        ctx.logger.info(f"repeat of {msg.msg_id} from {sender}; already handled")
+        return
+    seen_messages.append(str(msg.msg_id))
     text = "".join(c.text for c in msg.content if isinstance(c, TextContent))
+    if not text.strip():
+        return  # e.g. a bare StartSessionContent: nothing to answer
     command = parse(text)
     ctx.logger.info(f"chat from {sender}: {command.kind}")
     if command.kind == "task":

@@ -63,7 +63,12 @@ class FakeAPI:
             "id": "rwd_1",
             "status": "completed",
             "steps": [
-                {"result": "skipped", "kept_fields": []},
+                {
+                    "tool": "email_send",
+                    "result": "skipped",
+                    "kept_fields": [],
+                    "detail": "Rejected while held. Nothing ran.",
+                },
                 {"result": "kept_human_edit", "kept_fields": ["postgres:products/1/price"]},
                 {"result": "restored", "kept_fields": []},
             ],
@@ -139,6 +144,7 @@ async def test_rewind_uses_the_last_session_and_reports_kept_edits() -> None:
     assert api.rewound == [SES]
     assert "completed" in reply.text and "postgres:products/1/price" in reply.text
     assert "postgres ok" in reply.text and reply.end_session
+    assert "Held actions: 1 email rejected, never sent." in reply.text
 
 
 async def test_approve_by_code_and_by_card_use_the_asi_one_channel() -> None:
@@ -153,3 +159,20 @@ async def test_approve_by_code_and_by_card_use_the_asi_one_channel() -> None:
     assert api.decisions[-1][:3] == (HELD["id"], "reject", "4821") and "Rejected" in rejected.text
     missing = await logic.handle("user1", parse("approve 9999"))
     assert "No held action with code 9999" in missing.text
+
+
+def test_held_outcomes_cover_refunds_and_upstream_calls() -> None:
+    from mulligan_fetch.guardian_logic import describe_held_outcomes
+
+    steps = [
+        {"tool": "payments_charge", "result": "compensated", "detail": "Refunded"},
+        {
+            "tool": "upstream__slack__post_message",
+            "result": "skipped",
+            "detail": "Rejected while held.",
+        },
+        {"tool": "pg_delete_rows", "result": "restored", "detail": ""},
+    ]
+    assert (
+        describe_held_outcomes(steps) == "1 payment refunded; 1 upstream call rejected, never made"
+    )

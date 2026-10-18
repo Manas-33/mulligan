@@ -142,9 +142,38 @@ def describe_rewind(job: dict[str, Any]) -> str:
     if kept:
         text += "\nKept because a person changed them after the agent: " + ", ".join(kept[:5])
         text += "…" if len(kept) > 5 else ""
+    held = describe_held_outcomes(job["steps"])
+    if held:
+        text += "\nHeld actions: " + held + "."
     if checks:
         text += "\nChecksums: " + ", ".join(checks) + "."
     return text
+
+
+HELD_NOUNS = {
+    "email_send": ("email", "never sent", "correction sent"),
+    "payments_charge": ("payment", "never charged", "refunded"),
+}
+
+
+def describe_held_outcomes(steps: list[dict[str, Any]]) -> str:
+    """What the rewind did with the email, payment and upstream calls, e.g.
+    "1 email rejected, never sent; 1 payment refunded"."""
+    counts: Counter[str] = Counter()
+    for step in steps:
+        tool = step.get("tool", "")
+        noun, never, offset = HELD_NOUNS.get(tool, ("upstream call", "never made", "offset"))
+        if tool not in HELD_NOUNS and not tool.startswith("upstream__"):
+            continue
+        if step["result"] == "compensated":
+            counts[f"{noun} {offset}"] += 1
+        elif step["result"] == "skipped" and "rejected" in (step.get("detail") or "").lower():
+            counts[f"{noun} rejected, {never}"] += 1
+        elif step["result"] == "skipped":
+            counts[f"{noun} already done, can't be undone"] += 1
+        elif step["result"] == "restored":
+            counts[f"{noun} cancelled"] += 1
+    return "; ".join(f"{n} {what}" for what, n in counts.items())
 
 
 @dataclass
