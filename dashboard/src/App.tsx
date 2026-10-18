@@ -1,24 +1,32 @@
-// Phase 2 dashboard: sessions, a live action timeline, and approve/reject for held actions.
-// Layout and styling are placeholders until the Paper design lands.
+// The Mulligan dashboard: one agent session ("round") at a time. The round screen shows what the
+// agent did and what's held; the rewind screens show the plan, the live run and the proof.
 
-import { useEffect, useMemo, useReducer, useState } from "react";
-import { ApiError, createClient } from "./api/client.ts";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { createClient } from "./api/client.ts";
 import { streamEvents } from "./api/sse.ts";
-import { RewindDialog } from "./components/RewindDialog.tsx";
-import { API_URL, DASHBOARD_TOKEN, SENTRY_TRACE_URL } from "./config.ts";
+import { Course } from "./components/Course.tsx";
+import { Hero } from "./components/Hero.tsx";
+import { Holds } from "./components/Holds.tsx";
+import { Rewind } from "./components/Rewind.tsx";
+import { Logo } from "./components/SystemObject.tsx";
+import { API_URL, DASHBOARD_TOKEN } from "./config.ts";
 import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
-import type { Action, ApprovalDecision, Session } from "./types.ts";
+import type { Action, RewindJob } from "./types.ts";
+import { shortId, UNDOABLE } from "./view.ts";
 
 const client = createClient({ baseUrl: API_URL, token: DASHBOARD_TOKEN });
 
 type Conn = "connecting" | "live" | "reconnecting" | "error";
+
+/** What a rewind covers: the whole round, or back to (and including) one action. */
+type Target = { from?: Action };
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, empty);
   const [conn, setConn] = useState<Conn>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [rewinding, setRewinding] = useState(false);
+  const [rewinding, setRewinding] = useState<Target | null>(null);
 
   useEffect(() => {
     const stop = new AbortController();
@@ -40,161 +48,76 @@ export function App() {
 
   const sessions = useMemo(() => sessionList(state), [state]);
   const current = selected ?? sessions[0]?.id ?? null;
+  const session = current ? state.sessions[current] : undefined;
   const actions = useMemo(() => (current ? timeline(state, current) : []), [state, current]);
   const held = useMemo(() => heldActions(state), [state]);
-  const session = current ? state.sessions[current] : undefined;
-  const undoable = actions.some((a) => ["executed", "held", "approved", "conflict"].includes(a.status));
+  const canRewind = actions.some((a) => UNDOABLE.has(a.status));
+  const onJob = useCallback((job: RewindJob) => dispatch({ type: "rewind", job }), []);
 
   return (
     <div className="app">
-      <header className="topbar">
-        <h1>Mulligan</h1>
-        <span className={`conn conn-${conn}`}>{conn}</span>
-        <span className="muted">{API_URL}</span>
-        {held.length > 0 && <span className="pill pill-held">{held.length} waiting for approval</span>}
-      </header>
-      {error && <p role="alert" className="error">Can't reach the API: {error}</p>}
-      <div className="columns">
-        <nav className="sessions" aria-label="Sessions">
-          {sessions.length === 0 && <p className="muted">No sessions yet.</p>}
-          {sessions.map((s) => (
-            <SessionItem
-              key={s.id}
-              session={s}
-              count={timeline(state, s.id).length}
-              active={s.id === current}
-              onSelect={() => setSelected(s.id)}
-            />
-          ))}
-        </nav>
-        <main className="timeline">
-          {held.length > 0 && (
-            <section className="held-panel" aria-label="Waiting for approval">
-              <h2>Waiting for approval</h2>
-              <ol>
-                {held.map((a) => (
-                  <ActionRow key={a.id} action={a} />
-                ))}
-              </ol>
-            </section>
-          )}
-          {session && (
-            <div className="timeline-head">
-              <h2>{session.agent.display_name}</h2>
-              <span className="muted">{session.status}</span>
-              <button className="danger" disabled={!undoable} onClick={() => setRewinding(true)}>
-                Rewind session
-              </button>
-            </div>
-          )}
-          {actions.length === 0 ? (
-            <p className="muted">No actions in this session yet.</p>
-          ) : (
-            <ol>
-              {actions.map((a) => (
-                <ActionRow key={a.id} action={a} />
+      <nav className="nav" aria-label="Mulligan">
+        <span className="brand">
+          <Logo /> Mulligan
+        </span>
+        {sessions.length > 1 && (
+          <label className="round-picker">
+            <span className="quiet">round</span>
+            <select
+              value={current ?? ""}
+              onChange={(e) => {
+                setSelected(e.target.value);
+                setRewinding(null);
+              }}
+            >
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {shortId(s.id)} · {s.agent.display_name} · {s.status}
+                </option>
               ))}
-            </ol>
-          )}
-        </main>
-      </div>
-      {rewinding && session && (
-        <RewindDialog
+            </select>
+          </label>
+        )}
+        <span className={`conn conn-${conn}`} role="status">
+          <span className="dot" aria-hidden />
+          {conn === "live" ? `watching · ${state.lastSeq} events` : conn === "connecting" ? "connecting…" : conn === "reconnecting" ? "reconnecting…" : "offline"}
+        </span>
+      </nav>
+
+      {error && (
+        <p role="alert" className="error banner">
+          Can’t reach the gateway at {API_URL}: {error}
+        </p>
+      )}
+
+      {!session ? (
+        <section className="hero">
+          <div className="hero-text">
+            <h1 className="headline">
+              <span className="line">No rounds yet.</span>
+            </h1>
+            <p className="lede">When an agent connects through Mulligan, its session shows up here.</p>
+          </div>
+        </section>
+      ) : rewinding ? (
+        <Rewind
           client={client}
           session={session}
+          actions={state.actions}
+          from={rewinding.from}
           live={latestRewind(state, session.id)}
-          onJob={(job) => dispatch({ type: "rewind", job })}
-          onClose={() => setRewinding(false)}
+          onJob={onJob}
+          onClose={() => setRewinding(null)}
         />
+      ) : (
+        <>
+          <Hero session={session} actions={actions} canRewind={canRewind} onRewind={() => setRewinding({})} />
+          <div className="body">
+            <Course session={session} actions={actions} onRewindTo={(from) => setRewinding({ from })} />
+            <Holds client={client} held={held} />
+          </div>
+        </>
       )}
     </div>
-  );
-}
-
-// `count` comes from live state: Session.action_count is only as fresh as the last session event.
-function SessionItem(props: { session: Session; count: number; active: boolean; onSelect: () => void }) {
-  const { session, count, active, onSelect } = props;
-  return (
-    <button className={`session ${active ? "active" : ""}`} onClick={onSelect} aria-current={active}>
-      <strong>{session.agent.display_name}</strong>
-      <span className="muted">
-        {count} {count === 1 ? "action" : "actions"} · {session.status}
-        {session.mode === "replay" && <span className="pill">replay</span>}
-      </span>
-      <time className="muted">{new Date(session.started_at).toLocaleTimeString()}</time>
-    </button>
-  );
-}
-
-export function ActionRow({ action }: { action: Action }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const decide = async (decision: ApprovalDecision) => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await client.decide(action, decision); // the SSE event updates the row
-    } catch (e) {
-      setErr(e instanceof ApiError ? String(e.detail) : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <li className={`action status-${action.status}`}>
-      <span className={`lane lane-${action.system}`}>{action.system}</span>
-      <div className="action-body">
-        <div className="action-head">
-          <code>{action.tool}</code>
-          <span className={`pill pill-${action.status}`}>{action.status}</span>
-          <span className="pill" title={action.reversibility.reason ?? undefined}>
-            {action.reversibility.label.replace("_", " ")}
-          </span>
-          {action.upstream_server && <span className="pill">not undoable</span>}
-        </div>
-        <p>{action.summary ?? <span className="muted">{JSON.stringify(action.args_redacted)}</span>}</p>
-        {action.status === "held" && action.approval && (
-          <div className="held">
-            <span>
-              Code <strong>{action.approval.code}</strong>
-              {action.reversibility.reason && <> · {action.reversibility.reason}</>}
-            </span>
-            <button disabled={busy} onClick={() => decide("approve")}>
-              Approve
-            </button>
-            <button disabled={busy} className="secondary" onClick={() => decide("reject")}>
-              Reject
-            </button>
-          </div>
-        )}
-        {action.hold?.kind === "payment_auth" && action.hold.release_at && action.status === "executed" && (
-          <PaymentHold releaseAt={action.hold.release_at} />
-        )}
-        {action.error && <p className="error">{action.error}</p>}
-        {err && <p className="error">{err}</p>}
-      </div>
-      <div className="action-meta">
-        <time className="muted">{new Date(action.created_at).toLocaleTimeString()}</time>
-        {action.sentry_trace_id && (
-          <a className="muted" href={SENTRY_TRACE_URL + action.sentry_trace_id} target="_blank" rel="noreferrer">
-            trace
-          </a>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function PaymentHold({ releaseAt }: { releaseAt: string }) {
-  const at = new Date(releaseAt);
-  const captured = at.getTime() <= Date.now();
-  return (
-    <p className="muted">
-      {captured ? "Captured at " : "Authorized only. Captures at "}
-      {at.toLocaleTimeString()}
-      {captured ? " (a rewind now refunds it)." : " unless rewound first."}
-    </p>
   );
 }

@@ -1,6 +1,6 @@
 import { GatewayError, type Gateway } from "../src/gateway.ts";
 import { NotReachable, type Conversation, type InboundText, type Messenger } from "../src/photon.ts";
-import type { Action, ApprovalDecisionRequest } from "../src/types.ts";
+import type { Action, ApprovalDecisionRequest, RewindJob } from "../src/types.ts";
 
 export const CONVO: Conversation = { spaceId: "spc_1", senderId: "usr_line" };
 
@@ -44,7 +44,12 @@ export class FakeGateway implements Gateway {
   decisions: { actionId: string; body: ApprovalDecisionRequest }[] = [];
   failWith: GatewayError | null = null;
   runResult: Action["status"] = "executed";
+  jobs: RewindJob[] = [];
   constructor(public held: Action[] = []) {}
+
+  async rewinds() {
+    return this.jobs;
+  }
 
   async heldActions() {
     return this.held;
