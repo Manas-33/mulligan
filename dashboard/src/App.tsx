@@ -14,7 +14,7 @@ import type { StreamStatus } from "./api/sse.ts";
 import { GatewayProblem, Loading, NoRounds } from "./components/States.tsx";
 import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
 import type { Action, RewindJob } from "./types.ts";
-import { describeProblem, type Problem, shortId, UNDOABLE } from "./view.ts";
+import { describeProblem, isUndoable, type Problem, shortId } from "./view.ts";
 
 // The sponsor-evidence page is its own chunk: judges open it, the demo doesn't need it.
 const Evidence = lazy(() => import("./components/Evidence.tsx"));
@@ -126,7 +126,7 @@ export function App() {
   const session = current ? state.sessions[current] : undefined;
   const actions = useMemo(() => (current ? timeline(state, current) : []), [state, current]);
   const held = useMemo(() => heldActions(state), [state]);
-  const canRewind = actions.some((a) => UNDOABLE.has(a.status));
+  const canRewind = actions.some(isUndoable);
   const onJob = useCallback((job: RewindJob) => dispatch({ type: "rewind", job }), []);
 
   return (
