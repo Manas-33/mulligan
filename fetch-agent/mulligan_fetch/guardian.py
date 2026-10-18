@@ -69,13 +69,11 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage) -> None:
     if command.kind == "task":
         request_id = uuid4().hex
         pending[request_id] = sender
-        await ctx.send(
-            sender, to_message(Reply("On it: my worker is running that through Mulligan…"))
-        )
+        # No "on it" message: ASI:One shows only the last message per turn, so the report that
+        # comes back from the worker is the one reply.
         await ctx.send(worker_address, TaskRequest(request_id=request_id, task=command.text))
         return
-    for reply in await logic.handle(sender, command):
-        await ctx.send(sender, to_message(reply))
+    await ctx.send(sender, to_message(await logic.handle(sender, command)))
 
 
 @chat.on_message(ChatAcknowledgement)
@@ -89,11 +87,10 @@ async def on_result(ctx: Context, sender: str, msg: TaskResult) -> None:
     if chat_sender is None or sender != worker_address:
         return
     if msg.error:
-        replies = [Reply(f"The worker failed: {msg.error}", end_session=True)]
+        reply = Reply(f"The worker failed: {msg.error}", end_session=True)
     else:
-        replies = await logic.task_finished(chat_sender, msg.task, msg.steps, msg.action_ids)
-    for reply in replies:
-        await ctx.send(chat_sender, to_message(reply))
+        reply = await logic.task_finished(chat_sender, msg.task, msg.steps, msg.action_ids)
+    await ctx.send(chat_sender, to_message(reply))
 
 
 guardian.include(chat, publish_manifest=True)

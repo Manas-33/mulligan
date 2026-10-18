@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from mulligan_fetch.guardian_logic import GuardianLogic, held_card, parse, rewind_card
+from mulligan_fetch.guardian_logic import GuardianLogic, parse, rewind_card
 
 SES = "ses_01M561Q6R04CJZXHXRCFFNM7C4"
 HELD = {
@@ -103,48 +103,39 @@ def test_parse_card_clicks() -> None:
     assert parse(json.dumps({"action": "keep", "session_id": SES})).kind == "keep"
 
 
-def test_cards_use_string_metadata_and_object_selections() -> None:
-    for meta in (rewind_card(SES, [DELETE, HELD]), held_card(HELD)):
-        assert all(isinstance(v, str) for v in meta.values())
-        assert meta["card_kind"] == "review"
-        payload = json.loads(meta["card_payload"])
-        assert isinstance(payload["approve_cta"]["selection"], dict)
-        assert isinstance(payload["reject_cta"]["selection"], dict)
-    payload = json.loads(held_card(HELD)["card_payload"])
-    assert payload["approve_cta"]["selection"] == {
-        "action": "approve",
-        "action_id": HELD["id"],
-        "code": "4821",
-    }
+def test_rewind_card_uses_string_metadata_and_object_selections() -> None:
+    meta = rewind_card(SES, [DELETE, HELD])
+    assert all(isinstance(v, str) for v in meta.values())
+    assert meta["card_kind"] == "review"
+    payload = json.loads(meta["card_payload"])
+    assert payload["approve_cta"]["selection"] == {"action": "rewind", "session_id": SES}
+    assert payload["reject_cta"]["selection"] == {"action": "keep", "session_id": SES}
 
 
-async def test_task_report_has_a_rewind_card_and_one_card_per_held_action() -> None:
+async def test_task_report_is_one_reply_with_held_codes_and_a_rewind_card() -> None:
     logic = GuardianLogic(FakeAPI())  # type: ignore[arg-type]
-    replies = await logic.task_finished("user1", "cleanup", [], [DELETE["id"]])
+    reply = await logic.task_finished("user1", "cleanup", [], [DELETE["id"]])
     assert logic.last_session["user1"] == SES
-    assert "Deleted 30 rows" in replies[0].text and "github_list_issues" not in replies[0].text
-    assert "1 held for approval" in replies[0].text
-    assert (
-        replies[0].card
-        and json.loads(replies[0].card["card_payload"])["title"] == "Rewind this session?"
-    )
-    assert len(replies) == 2 and replies[1].card
+    assert "Postgres:" in reply.text and "Deleted 30 rows" in reply.text
+    assert "github_list_issues" not in reply.text  # reads are left out
+    assert "code 4821" in reply.text and "approve 4821" in reply.text
+    assert reply.card and json.loads(reply.card["card_payload"])["title"] == "Rewind this session?"
 
 
 async def test_task_with_no_actions_says_so() -> None:
     logic = GuardianLogic(FakeAPI())  # type: ignore[arg-type]
     steps = [{"tool": "pg_delete_rows", "status": "skipped"}]
-    replies = await logic.task_finished("user1", "cleanup", steps, [])
-    assert "couldn't" in replies[0].text and "pg_delete_rows (skipped)" in replies[0].text
+    reply = await logic.task_finished("user1", "cleanup", steps, [])
+    assert "couldn't" in reply.text and "pg_delete_rows (skipped)" in reply.text
 
 
 async def test_rewind_uses_the_last_session_and_reports_kept_edits() -> None:
     api = FakeAPI()
     logic = GuardianLogic(api)  # type: ignore[arg-type]
     none_yet = await logic.handle("user1", parse("rewind"))
-    assert "no session" in none_yet[0].text.lower() and api.rewound == []
+    assert "no session" in none_yet.text.lower() and api.rewound == []
     await logic.task_finished("user1", "cleanup", [], [DELETE["id"]])
-    [reply] = await logic.handle("user1", parse("rewind"))
+    reply = await logic.handle("user1", parse("rewind"))
     assert api.rewound == [SES]
     assert "completed" in reply.text and "postgres:products/1/price" in reply.text
     assert "postgres ok" in reply.text and reply.end_session
@@ -154,11 +145,11 @@ async def test_approve_by_code_and_by_card_use_the_asi_one_channel() -> None:
     api = FakeAPI()
     logic = GuardianLogic(api)  # type: ignore[arg-type]
     await logic.task_finished("user1", "cleanup", [], [DELETE["id"]])
-    [reply] = await logic.handle("user1", parse("approve 4821"))
+    reply = await logic.handle("user1", parse("approve 4821"))
     assert api.decisions[-1][:3] == (HELD["id"], "approve", "4821")
-    assert api.decisions[-1][3].startswith("asi_one:") and "approved" in reply.text
+    assert api.decisions[-1][3].startswith("asi_one:") and "Approved" in reply.text
     click = json.dumps({"action": "reject", "action_id": HELD["id"], "code": "4821"})
-    await logic.handle("user2", parse(click))
-    assert api.decisions[-1][:3] == (HELD["id"], "reject", "4821")
-    [missing] = await logic.handle("user1", parse("approve 9999"))
+    rejected = await logic.handle("user2", parse(click))
+    assert api.decisions[-1][:3] == (HELD["id"], "reject", "4821") and "Rejected" in rejected.text
+    missing = await logic.handle("user1", parse("approve 9999"))
     assert "No held action with code 9999" in missing.text
