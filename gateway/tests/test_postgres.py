@@ -452,3 +452,26 @@ async def test_verification_catches_a_bad_restore(svc: Services, human: Any) -> 
     job = await rewind(svc, session)
     assert job.verification["postgres"].ok is False
     assert job.status is RewindJobStatus.partial
+
+
+async def test_undrop_gives_back_only_the_view_grants_the_read_only_role_had(
+    svc: Services, human: Any
+) -> None:
+    for view, granted in [("pricing_public_v", True), ("pricing_private_v", False)]:
+        await human.execute(f"CREATE VIEW {view} AS SELECT * FROM legacy_pricing")
+        await human.execute(f"ALTER VIEW {view} OWNER TO mulligan_gw")
+        verb = "GRANT SELECT ON {} TO" if granted else "REVOKE ALL ON {} FROM"
+        await human.execute(verb.format(view) + " mulligan_ro")
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    dropped = await svc.gateway.call_tool(session, "pg_drop_table", {"table": "legacy_pricing"})
+    assert not dropped.is_error
+    assert sorted(dropped.structured_content["dependent_views"]) == [
+        "pricing_private_v",
+        "pricing_public_v",
+    ]
+    can_read = "SELECT has_table_privilege('mulligan_ro', '{}', 'SELECT')"
+    assert await scalar(human, can_read.format("pricing_public_v")) is False
+    done = await rewind(svc, session)
+    assert done.status is RewindJobStatus.completed
+    assert await scalar(human, can_read.format("pricing_public_v")) is True
+    assert await scalar(human, can_read.format("pricing_private_v")) is False
