@@ -200,6 +200,55 @@ def build_mcp(settings: Settings, gateway: Gateway) -> tuple[MCPServer, AgentTok
     async def pg_drop_table(ctx: Context, table: str = Table) -> CallToolResult:
         return await run("pg_drop_table", {"table": table}, ctx)
 
+    @tool("github_list_issues", "List issues in the company repository, newest first.", read)
+    async def github_list_issues(
+        ctx: Context,
+        state: Literal["open", "closed", "all"] = "open",
+        labels: list[str] | None = Field(
+            default=None, description="Only issues with all of these."
+        ),
+        since: str | None = Field(
+            default=None, description="Only issues updated after (ISO 8601)."
+        ),
+        per_page: int = Field(default=30, ge=1, le=100),
+        page: int = Field(default=1, ge=1),
+    ) -> CallToolResult:
+        args = {
+            "state": state,
+            "labels": labels,
+            "since": since,
+            "per_page": per_page,
+            "page": page,
+        }
+        return await run("github_list_issues", args, ctx)
+
+    @tool("github_close_issue", "Close an issue, optionally with a comment.", write)
+    async def github_close_issue(
+        ctx: Context,
+        number: int = Field(ge=1),
+        state_reason: Literal["completed", "not_planned"] = "completed",
+        comment: str | None = Field(default=None, description="Posted before closing."),
+    ) -> CallToolResult:
+        args = {"number": number, "state_reason": state_reason, "comment": comment}
+        return await run("github_close_issue", args, ctx)
+
+    @tool("github_comment", "Comment on an issue.", write)
+    async def github_comment(
+        ctx: Context, number: int = Field(ge=1), body: str = Field(min_length=1)
+    ) -> CallToolResult:
+        return await run("github_comment", {"number": number, "body": body}, ctx)
+
+    @tool("github_update_file", "Create or replace a file in the repository (one commit).", write)
+    async def github_update_file(
+        ctx: Context,
+        path: str = Field(min_length=1, description="Path in the repository, e.g. docs/a.md"),
+        content: str = Field(description="The whole new file, UTF-8."),
+        message: str = Field(min_length=1, description="Commit message."),
+        branch: str | None = Field(default=None, description="Defaults to the default branch."),
+    ) -> CallToolResult:
+        args = {"path": path, "content": content, "message": message, "branch": branch}
+        return await run("github_update_file", args, ctx)
+
     @tool("email_send", "Send an email. Waits for a human's approval before it is sent.", write)
     async def email_send(
         ctx: Context,

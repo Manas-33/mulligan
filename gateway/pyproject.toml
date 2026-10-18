@@ -67,5 +67,8 @@ warn_unused_ignores = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: needs docker compose up (both Postgres DBs)"]
-addopts = "-m 'not integration'"
+markers = [
+    "integration: needs docker compose up (both Postgres DBs)",
+    "live: writes to the real GitHub test repo (MULLIGAN_LIVE_GITHUB=1, plus `make db`)",
+]
+addopts = "-m 'not integration and not live'"
