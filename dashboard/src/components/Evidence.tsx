@@ -79,9 +79,9 @@ function Hole({ id, n, title, par, children }: { id: string; n: number; title: s
 // --- Hole 1: Sentry --------------------------------------------------------------------------
 
 function SentryHole() {
-  const { crashEventUrl, actionSpansUrl, fixCommit, shots } = EVIDENCE.sentry;
+  const { crashEventUrl, actionSpansUrl, rewindTraceUrl, rewindFixCommit, fixCommit, shots } = EVIDENCE.sentry;
   return (
-    <Hole id="hole-sentry" n={1} title="Sentry caught the gateway falling over" par="error → root cause → commit">
+    <Hole id="hole-sentry" n={1} title="Sentry caught the gateway falling over" par="error → root cause → commit, twice">
       <div className="notes">
         <ol className="steps">
           <Step mark="1" title="The gateway crashed on startup under Docker Compose.">
@@ -135,13 +135,44 @@ function SentryHole() {
           Every dashboard session is recorded with all text masked and media blocked, since the screens show customer data. Replay
           loads after the page, so it doesn’t slow the first paint.
         </Product>
+        <Product name="Logs" where="gateway">
+          The gateway’s own logging at INFO and above goes to Sentry Logs, so a request, a hold and an error sit in one place with
+          the traces.
+        </Product>
         <Product name="Errors" where="gateway · dashboard · Photon">
           All three services report to their own projects. The Photon service reports once per failure streak, so a gateway that’s
           down for an hour is one issue, not thousands.
         </Product>
       </ul>
       <div className="trace-shot">
-        <Shots shots={shots.slice(1)} />
+        <Shots shots={shots.slice(1, 2)} />
+      </div>
+
+      <h3 className="notes-title">And what wasn’t there</h3>
+      <div className="notes">
+        <ol className="steps">
+          <Step mark="1" title="Action spans arrived. Rewind spans never did.">
+            Looking for a rewind’s trace for this page, Sentry had dozens of <code className="mono">mulligan.action</code> spans and
+            not one <code className="mono">mulligan.rewind</code> in two weeks.
+          </Step>
+          <Step mark="2" title="The rewind outlived its request.">
+            A rewind runs in a background task after <code className="mono">POST /api/rewind</code> has already answered. Its spans
+            hung off the request’s transaction, which was finished and sent by then, so Sentry dropped them.
+          </Step>
+          <Step mark="3" title="The fix.">
+            Each run now opens its own transaction, tagged with the job, session and final status, and its steps nest inside.{" "}
+            <ExtLink href={`${REPO}/commit/${rewindFixCommit}`}>
+              commit <span className="mono">{rewindFixCommit.slice(0, 7)}</span>
+            </ExtLink>
+            {rewindTraceUrl && (
+              <>
+                {" "}
+                <ExtLink href={rewindTraceUrl}>The first rewind trace</ExtLink>
+              </>
+            )}
+          </Step>
+        </ol>
+        <Shots shots={shots.slice(2)} />
       </div>
     </Hole>
   );
