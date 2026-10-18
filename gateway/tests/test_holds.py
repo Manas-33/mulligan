@@ -286,7 +286,9 @@ def test_core_picks_up_stream_b_plugins(monkeypatch: pytest.MonkeyPatch) -> None
     store = MemStore()
     hm = services.make_hold_manager(HoldDeps(store=store, bus=MemBus(), runner=Runner(store)))
     assert isinstance(hm, PhotonHoldManager)
-    assert services.make_hold_adapters() == holds.create_adapters() == []
+    adapters = services.make_hold_adapters()
+    assert [type(a).__name__ for a in adapters] == ["PaymentsAdapter"]
+    assert adapters == holds.create_adapters()  # one shared instance
 
 
 def test_notifier_reads_env_overrides_and_handle_fallback() -> None:
