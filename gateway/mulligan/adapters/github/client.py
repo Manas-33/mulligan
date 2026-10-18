@@ -25,6 +25,11 @@ class GitHubError(Exception):
         self.message = message
 
 
+class GitHubWriteUnknown(GitHubError):
+    """A write that went out with no clear answer (the connection failed, or GitHub answered
+    5xx), so it may have landed. Never resent."""
+
+
 def _message(response: httpx.Response) -> str:
     try:
         body = response.json()
@@ -122,8 +127,11 @@ class GitHubClient:
                 response = await self.http.request(method, url, params=params, json=json)
             except httpx.TransportError as exc:
                 # Only reads are safe to resend: a write may have landed before the error.
-                if method != "GET" or attempt == MAX_ATTEMPTS:
-                    raise GitHubError(0, f"{type(exc).__name__} talking to GitHub") from exc
+                message = f"{type(exc).__name__} talking to GitHub"
+                if method != "GET":
+                    raise GitHubWriteUnknown(0, message) from exc
+                if attempt == MAX_ATTEMPTS:
+                    raise GitHubError(0, message) from exc
                 await asyncio.sleep(attempt)
                 continue
             if response.is_success:
@@ -137,6 +145,8 @@ class GitHubClient:
             if response.status_code >= 500 and method == "GET" and attempt < MAX_ATTEMPTS:
                 await asyncio.sleep(attempt)
                 continue
+            if response.status_code >= 500 and method != "GET":
+                raise GitHubWriteUnknown(response.status_code, _message(response))
             raise GitHubError(response.status_code, _message(response))
         raise AssertionError("unreachable")
 

@@ -18,6 +18,7 @@ from mulligan.interfaces import (
     ToolCall,
     ToolResult,
     UpstreamToolSchema,
+    WriteUncertain,
 )
 from mulligan.log.events import EventBus
 from mulligan.log.store import LogStore
@@ -267,6 +268,7 @@ class Gateway:
                 span.set_data("mulligan.action_id", action.id)
                 span.set_data("mulligan.system", adapter.system.value)
                 trace_id = span.trace_id if sentry_sdk.get_client().is_active() else None
+                pre: str | None = None
                 try:
                     pre = await adapter.checksum() if writes else None
                     before = await adapter.capture_before(call)
@@ -277,14 +279,26 @@ class Gateway:
                     inverse = await adapter.build_inverse(call, before, after, result)
                 except Exception as exc:  # noqa: BLE001 (any failure is logged on the action)
                     error = str(exc)[:500] or type(exc).__name__
-                    action = action.model_copy(
-                        update={
-                            "status": ActionStatus.failed,
-                            "error": error,
-                            "sentry_trace_id": trace_id,
-                        }
-                    )
+                    update: dict[str, Any] = {
+                        "status": ActionStatus.failed,
+                        "error": error,
+                        "sentry_trace_id": trace_id,
+                    }
+                    uncertain = exc if isinstance(exc, WriteUncertain) else None
+                    if uncertain is not None:
+                        # Failed for the agent, but it keeps an inverse so a rewind checks for
+                        # the change and undoes it if it landed.
+                        error = f"{error.rstrip('.')}. The change may have landed anyway."
+                        update.update(
+                            error=error,
+                            before_ref=uncertain.before_ref,
+                            after_hashes=uncertain.after_hashes,
+                            inverse=uncertain.inverse,
+                        )
+                    action = action.model_copy(update=update)
                     await self.store.save(action)
+                    if uncertain is not None and pre is not None:
+                        await self.store.put_checksum(action.id, adapter.system, pre, None)
                     await self.bus.publish(EventName.action_failed, action)
                     return action, ToolResult(
                         structured_content={"action_id": action.id, "status": "failed"},

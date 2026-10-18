@@ -3,6 +3,7 @@ copy of the demo company on prod-db (needs `make db`)."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -197,6 +198,37 @@ async def test_teammate_edit_is_kept_and_verification_still_passes(
     assert job.verification["postgres"].ok is True
     action = await svc.store.get(step.action_id)
     assert action is not None and action.status is ActionStatus.conflict
+
+
+async def test_a_teammate_edit_during_the_revert_waits_instead_of_being_overwritten(
+    svc: Services, human: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    sku1 = [{"column": "sku", "op": "eq", "value": "WID-001"}]
+    await svc.gateway.call_tool(
+        session, "pg_update_rows", {"table": "products", "filter": sku1, "values": {"price": 0}}
+    )
+    adapter = svc.gateway.by_system[PostgresAdapter.system]
+    assert isinstance(adapter, PostgresAdapter)
+    apply = adapter._apply
+    edit: list[asyncio.Task[Any]] = []
+    blocked: list[bool] = []
+
+    async def teammate_edits_in_between(*args: Any) -> None:
+        # The revert has checked the row and not written yet: a teammate sets the price.
+        sql_edit = "update products set price = 45 where sku = 'WID-001'"
+        edit.append(asyncio.create_task(human.execute(sql_edit)))
+        await asyncio.sleep(0.3)
+        blocked.append(not edit[0].done())
+        await apply(*args)
+
+    monkeypatch.setattr(adapter, "_apply", teammate_edits_in_between)
+    job = await rewind(svc, session)
+    await edit[0]
+    assert blocked == [True]  # it waited for the revert's transaction
+    assert job.steps[0].result is StepResult.restored
+    # Applied after the revert, so it stands.
+    assert await scalar(human, "select price from products where sku = 'WID-001'") == 45
 
 
 async def test_reused_primary_key_is_a_conflict(svc: Services, human: Any) -> None:

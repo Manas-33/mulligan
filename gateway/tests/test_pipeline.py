@@ -25,6 +25,7 @@ from mulligan.models import (
     SessionStatus,
     StepResult,
 )
+from mulligan.orchestrator.rewind import INTERRUPTED
 from mulligan.services import Services, assemble
 from mulligan.settings import Settings
 from tests.fakes import FakeTableAdapter
@@ -137,6 +138,78 @@ async def test_failed_step_makes_the_job_partial(svc: Services) -> None:
     assert action is not None and action.status is ActionStatus.revert_failed
 
 
+async def run_rewind(svc: Services, session_id: str) -> Any:
+    job = await svc.rewinder.create(
+        RewindRequest(scope=RewindScope(session_id=session_id), dry_run=False)
+    )
+    await svc.rewinder.wait()
+    return await svc.store.get_job(job.id)
+
+
+async def test_a_failed_step_is_tried_again_by_the_next_rewind(svc: Services) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 1}]
+    await svc.gateway.call_tool(session, "pg_update_rows", {"filter": flt, "values": {"price": 1}})
+    fake(svc).fail_next_revert = True
+    first = await run_rewind(svc, session.id)
+    assert first.status is RewindJobStatus.partial
+    assert fake(svc).rows[1]["price"] == 1
+
+    again = await svc.rewinder.create(RewindRequest(scope=RewindScope(session_id=session.id)))
+    assert [s.action_id for s in again.steps] == [first.steps[0].action_id]
+    second = await run_rewind(svc, session.id)
+    assert second.status is RewindJobStatus.completed
+    assert [s.result for s in second.steps] == [StepResult.restored]
+    assert fake(svc).rows[1]["price"] == 49
+    action = await svc.store.get(second.steps[0].action_id)
+    assert action is not None and action.status is ActionStatus.reverted
+    assert action.error is None
+
+
+async def test_an_action_left_reverting_is_tried_again(svc: Services) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 1}]
+    out = await svc.gateway.call_tool(
+        session, "pg_update_rows", {"filter": flt, "values": {"price": 1}}
+    )
+    action = await svc.store.get(out.structured_content["action_id"])
+    assert action is not None
+    # The gateway stopped in the middle of reverting it.
+    await svc.store.save(action.model_copy(update={"status": ActionStatus.reverting}))
+
+    plan = await svc.rewinder.create(RewindRequest(scope=RewindScope(session_id=session.id)))
+    assert [s.action_id for s in plan.steps] == [action.id]
+    stuck = await svc.store.get(action.id)
+    assert stuck is not None and stuck.status is ActionStatus.revert_failed
+    assert stuck.error == INTERRUPTED
+    done = await run_rewind(svc, session.id)
+    assert [s.result for s in done.steps] == [StepResult.restored]
+    assert fake(svc).rows[1]["price"] == 49
+
+
+async def test_a_revert_whose_outcome_cant_be_saved_isnt_left_reverting(
+    svc: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = await svc.gateway.start_session(AGENT, SessionMode.live)
+    flt = [{"column": "id", "op": "eq", "value": 1}]
+    await svc.gateway.call_tool(session, "pg_update_rows", {"filter": flt, "values": {"price": 1}})
+    save = svc.store.save
+    dropped: list[str] = []
+
+    async def drop_once(action: Any) -> None:
+        if action.status is ActionStatus.reverted and not dropped:
+            dropped.append(action.id)
+            raise ConnectionError("log database went away")
+        await save(action)
+
+    monkeypatch.setattr(svc.store, "save", drop_once)
+    done = await run_rewind(svc, session.id)
+    assert dropped and [s.result for s in done.steps] == [StepResult.restored]
+    action = await svc.store.get(dropped[0])
+    assert action is not None and action.status is ActionStatus.revert_failed
+    assert action.error == INTERRUPTED
+
+
 async def test_held_call_runs_only_after_approval(svc: Services) -> None:
     # Hold every call to pg_update_rows for this test by pretending the policy says so.
     entry = svc.gateway.policy.entry("pg_update_rows")
@@ -214,6 +287,16 @@ async def test_rest_routes(svc: Services) -> None:
         await svc.rewinder.wait()
         job = (await c.get(f"/api/rewind/{run.json()['id']}")).json()
         assert job["status"] == "completed" and job["requested_by"] == "dashboard"
+        service = {"Authorization": "", "X-Mulligan-Service-Token": "svc"}
+        labels = []
+        for label in ("dashboard", "asi_one", None):
+            body = {"scope": scope, "requested_by": label}
+            labels.append((await c.post("/api/rewind", json=body, headers=service)).json())
+        assert [j["requested_by"] for j in labels] == [
+            "service:dashboard",  # only the dashboard's token reads as "dashboard"
+            "service:asi_one",
+            "service",
+        ]
         assert (await c.post("/api/rewind", json={"scope": {}})).status_code == 422
         checks = (await c.get("/api/checksums?recompute=true")).json()
         assert set(checks) == {"postgres"}

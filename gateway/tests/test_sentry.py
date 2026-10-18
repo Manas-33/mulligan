@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +12,7 @@ import sentry_sdk
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 
+from mulligan.__main__ import SkipHealthChecks
 from mulligan.models import RewindJob, RewindJobStatus, RewindScope
 from mulligan.orchestrator.rewind import Rewinder
 
@@ -100,3 +102,22 @@ def test_scope_is_recorded() -> None:
     assert RewindScope(session_id=SES).model_dump(mode="json", exclude_none=True) == {
         "session_id": SES
     }
+
+
+def test_healthchecks_stay_out_of_the_logs() -> None:
+    def access(path: str) -> logging.LogRecord:
+        # How uvicorn logs a request (uvicorn.protocols.http.h11_impl).
+        return logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            1,
+            '%s - "%s %s HTTP/%s" %d',
+            ("172.18.0.1:5000", "GET", path, "1.1", 200),
+            None,
+        )
+
+    skip = SkipHealthChecks()
+    assert not skip.filter(access("/healthz"))
+    assert skip.filter(access("/api/actions?limit=5"))
+    assert skip.filter(logging.LogRecord("uvicorn.error", logging.INFO, "", 1, "Started", (), None))

@@ -15,6 +15,7 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 from mulligan.adapters.github.adapter import GitHubAdapter
 from mulligan.adapters.notion.adapter import NotionAdapter
 from mulligan.adapters.postgres.adapter import PostgresAdapter
+from mulligan.api.auth import HEALTH_PATHS
 from mulligan.app import create_app
 from mulligan.interfaces import Adapter
 from mulligan.mcp_server.server import create_mcp_app
@@ -23,6 +24,18 @@ from mulligan.settings import Settings
 from mulligan.upstream import UpstreamAdapter, parse_servers
 
 log = logging.getLogger("mulligan")
+
+
+class SkipHealthChecks(logging.Filter):
+    """Drops uvicorn's access line for GET /healthz. Docker's healthcheck calls it every few
+    seconds, which would bury the gateway's own lines in stdout and in Sentry Logs (a filter on
+    the logger runs before both)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 3:
+            return True
+        return str(args[2]).split("?", 1)[0] not in HEALTH_PATHS
 
 
 async def serve(settings: Settings) -> None:
@@ -56,6 +69,8 @@ async def serve(settings: Settings) -> None:
         uvicorn.Server(uvicorn.Config(rest, host=settings.bind_host, port=settings.api_port)),
         uvicorn.Server(uvicorn.Config(mcp, host=settings.bind_host, port=settings.mcp_port)),
     ]
+    # After the configs: each one re-applies uvicorn's logging config.
+    logging.getLogger("uvicorn.access").addFilter(SkipHealthChecks())
     log.info(
         "REST on %s:%s, MCP on %s:%s/mcp",
         settings.bind_host,

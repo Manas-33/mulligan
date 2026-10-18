@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote
 
@@ -34,7 +35,10 @@ class FakeGitHub:
         self.next_id = 1000
         self.writes: list[str] = []
         self.requests: list[str] = []
-        self.fail: list[httpx.Response] = []  # returned (once each) before handling a request
+        # Returned, or raised, once each before handling a request.
+        self.fail: list[httpx.Response | Exception] = []
+        # Writes ("PATCH issues/2") applied, then answered with a dropped connection, once each.
+        self.lose: list[str] = []
 
     def client(self, **kw: Any) -> GitHubClient:
         return GitHubClient(
@@ -75,7 +79,10 @@ class FakeGitHub:
         assert request.headers["x-github-api-version"] == "2026-03-10"
         self.requests.append(f"{request.method} {request.url.path}")
         if self.fail:
-            return self.fail.pop(0)
+            failure = self.fail.pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
         path = unquote(request.url.path)
         if not path.startswith(PREFIX):
             return _json(404, {"message": "Not Found"})
@@ -87,7 +94,11 @@ class FakeGitHub:
         for pattern, method, handler in self.routes():
             match = re.fullmatch(pattern, rest)
             if match and request.method == method:
-                return handler(request, body, params, *match.groups())  # type: ignore[no-any-return]
+                response: httpx.Response = handler(request, body, params, *match.groups())
+                if f"{request.method} {rest}" in self.lose:
+                    self.lose.remove(f"{request.method} {rest}")
+                    raise httpx.ReadTimeout("reply lost", request=request)
+                return response
         return _json(404, {"message": "Not Found"})
 
     def routes(self) -> list[tuple[str, str, Any]]:
@@ -104,6 +115,7 @@ class FakeGitHub:
             (r"issues/comments/(\d+)", "DELETE", self.delete_comment),
             (r"issues/(\d+)", "GET", self.get_issue),
             (r"issues/(\d+)", "PATCH", self.update_issue),
+            (r"issues/(\d+)/comments", "GET", self.list_issue_comments),
             (r"issues/(\d+)/comments", "POST", self.create_comment),
             (r"contents/(.+)", "GET", self.get_file),
             (r"contents/(.+)", "PUT", self.put_contents),
@@ -191,8 +203,24 @@ class FakeGitHub:
         if int(n) not in self.issues:
             return _json(404, {"message": "Not Found"})
         self.next_id += 1
-        self.comments[self.next_id] = {"id": self.next_id, "body": body["body"], "_n": int(n)}
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.comments[self.next_id] = {
+            "id": self.next_id,
+            "body": body["body"],
+            "created_at": now,
+            "updated_at": now,
+            "_n": int(n),
+        }
         return _json(201, self._comment_json(self.comments[self.next_id]))
+
+    def list_issue_comments(self, request: Any, body: Any, params: dict[str, str], n: str) -> Any:
+        since = params.get("since", "")
+        items = [
+            self._comment_json(c)
+            for c in sorted(self.comments.values(), key=lambda c: c["id"])
+            if c["_n"] == int(n) and c["updated_at"] >= since
+        ]
+        return self._page(request, items, params)
 
     def list_comments(self, request: Any, body: Any, params: Any) -> Any:
         items = [

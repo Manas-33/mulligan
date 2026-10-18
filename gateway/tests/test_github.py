@@ -17,8 +17,9 @@ from mulligan.adapters.github.adapter import (
     field_hash,
     load_seed,
 )
+from mulligan.adapters.github.client import GitHubWriteUnknown
 from mulligan.core import new_id
-from mulligan.interfaces import ToolCall
+from mulligan.interfaces import ToolCall, WriteUncertain
 from mulligan.models import (
     Action,
     ActionStatus,
@@ -57,49 +58,83 @@ async def adapter(gh: FakeGitHub) -> AsyncIterator[GitHubAdapter]:
         await a.close()
 
 
-async def call(adapter: GitHubAdapter, tool: str, args: dict[str, Any], n: int = 0) -> Action:
-    """What `Gateway.execute` does around one call, without the log."""
-    action_id = new_id("act")
-    tc = ToolCall(
-        action_id=action_id,
+def tool_call(tool: str, args: dict[str, Any]) -> ToolCall:
+    return ToolCall(
+        action_id=new_id("act"),
         session_id=SESSION,
         agent=AGENT,
         tool=tool,
         system=System.github,
         args=args,
     )
-    before = await adapter.capture_before(tc)
-    result = await adapter.execute(tc, before)
-    assert not result.is_error, result.summary
-    after = await adapter.capture_after(tc, before, result)
-    inverse = await adapter.build_inverse(tc, before, after, result)
+
+
+def logged(tc: ToolCall, n: int, **fields: Any) -> Action:
     return Action(
-        id=action_id,
+        id=tc.action_id,
         session_id=SESSION,
         agent=AGENT,
         system=System.github,
-        tool=tool,
+        tool=tc.tool,
         upstream_server=None,
-        args_redacted=args,
-        status=ActionStatus.executed,
+        args_redacted=tc.args,
         reversibility=Reversibility(
             label=ReversibilityLabel.reversible_noisy,
             source=ReversibilitySource.policy,
             reason="test",
         ),
+        approval=None,
+        hold=None,
+        explanation=None,
+        sentry_trace_id=None,
+        created_at=T0 + timedelta(seconds=n),
+        reverted_at=None,
+        **fields,
+    )
+
+
+async def call(adapter: GitHubAdapter, tool: str, args: dict[str, Any], n: int = 0) -> Action:
+    """What `Gateway.execute` does around one call, without the log."""
+    tc = tool_call(tool, args)
+    before = await adapter.capture_before(tc)
+    result = await adapter.execute(tc, before)
+    assert not result.is_error, result.summary
+    after = await adapter.capture_after(tc, before, result)
+    inverse = await adapter.build_inverse(tc, before, after, result)
+    return logged(
+        tc,
+        n,
+        status=ActionStatus.executed,
         summary=result.summary,
         error=None,
         before_ref=before.ref,
         after_ref=after.ref,
         after_hashes=after.after_hashes,
         inverse=inverse,
-        approval=None,
-        hold=None,
-        explanation=None,
-        sentry_trace_id=None,
-        created_at=T0 + timedelta(seconds=n),
         executed_at=T0 + timedelta(seconds=n),
-        reverted_at=None,
+    )
+
+
+async def call_unsure(
+    adapter: GitHubAdapter, tool: str, args: dict[str, Any], n: int = 0
+) -> Action:
+    """A call whose write got no answer: failed, with the inverse it raised, like the core."""
+    tc = tool_call(tool, args)
+    before = await adapter.capture_before(tc)
+    with pytest.raises(WriteUncertain) as info:
+        await adapter.execute(tc, before)
+    exc = info.value
+    return logged(
+        tc,
+        n,
+        status=ActionStatus.failed,
+        summary=None,
+        error=str(exc),
+        before_ref=exc.before_ref,
+        after_ref=None,
+        after_hashes=exc.after_hashes,
+        inverse=exc.inverse,
+        executed_at=None,
     )
 
 
@@ -368,3 +403,97 @@ async def test_seed_is_idempotent_and_reset_undoes_drift() -> None:
         assert await adapter.checksum() == clean
     finally:
         await client.aclose()
+
+
+async def test_comment_whose_reply_was_lost_is_found_and_deleted(
+    adapter: GitHubAdapter, gh: FakeGitHub
+) -> None:
+    pre = await adapter.checksum()
+    gh.lose.append("POST issues/1/comments")
+    action = await call_unsure(adapter, "github_comment", {"number": 1, "body": "Bumping this."})
+    (cid,) = gh.comments  # GitHub applied it; only the answer was lost
+    assert gh.writes == ["POST issues/1/comments"]  # and it was never sent again
+    assert action.inverse is not None and action.inverse.payload["comment"] is None
+
+    writes = len(gh.writes)
+    plan = await adapter.plan_revert(action)
+    assert plan.result is StepResult.pending and len(gh.writes) == writes
+    assert [(c.field, c.outcome) for c in plan.changes] == [
+        (f"github:comments/{cid}", FieldChangeOutcome.restore)
+    ]
+    step = await adapter.revert(action)
+    assert step.result is StepResult.restored and step.detail == f"Delete comment {cid}"
+    assert not gh.comments
+    assert await adapter.checksum() == pre
+    expected, actual = await adapter.verify_scope([action], [step]) or ("", "?")
+    assert expected == actual
+
+
+async def test_comment_that_never_landed_leaves_nothing_to_undo(
+    adapter: GitHubAdapter, gh: FakeGitHub
+) -> None:
+    gh.fail.append(httpx.ConnectError("connection refused"))
+    action = await call_unsure(adapter, "github_comment", {"number": 1, "body": "Bumping this."})
+    assert not gh.comments
+    # A teammate posts the same words much later: not the agent's comment.
+    gh.next_id += 1
+    later = (datetime.now(UTC) + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    gh.comments[gh.next_id] = {
+        "id": gh.next_id,
+        "body": "Bumping this.",
+        "created_at": later,
+        "updated_at": later,
+        "_n": 1,
+    }
+    step = await adapter.revert(action)
+    assert step.result is StepResult.restored and step.detail == "Nothing to restore."
+    assert list(gh.comments) == [gh.next_id] and not gh.writes
+
+
+async def test_close_whose_reply_was_lost_reopens_and_deletes_the_comment(
+    adapter: GitHubAdapter, gh: FakeGitHub
+) -> None:
+    pre = await adapter.checksum()
+    gh.lose.append("PATCH issues/2")
+    action = await call_unsure(
+        adapter, "github_close_issue", {"number": 2, "comment": "Closing as stale."}
+    )
+    (cid,) = gh.comments  # kept: the close may have landed, so a rewind undoes both
+    assert gh.issues[2]["state"] == "closed"
+    assert action.after_hashes == {
+        "github:issues/2/state": field_hash({"state": "closed", "state_reason": "completed"}),
+        f"github:comments/{cid}": field_hash("Closing as stale."),
+    }
+    step = await adapter.revert(action)
+    assert step.result is StepResult.restored, step.detail
+    assert gh.issues[2]["state"] == "open" and not gh.comments
+    assert await adapter.checksum() == pre
+
+
+async def test_file_update_whose_reply_was_lost_is_restored(
+    adapter: GitHubAdapter, gh: FakeGitHub
+) -> None:
+    pre = await adapter.checksum()
+    gh.lose.append("PUT contents/docs/pricing.md")
+    action = await call_unsure(
+        adapter,
+        "github_update_file",
+        {"path": "docs/pricing.md", "content": "Everything is free\n", "message": "Simplify"},
+    )
+    assert gh.files["docs/pricing.md"] == b"Everything is free\n"
+    assert action.after_hashes == {
+        "github:files/docs%2Fpricing.md": field_hash(blob_sha(b"Everything is free\n"))
+    }
+    step = await adapter.revert(action)
+    assert step.result is StepResult.restored, step.detail
+    assert gh.files["docs/pricing.md"] == b"Widget: $49\n"
+    assert await adapter.checksum() == pre
+
+
+async def test_write_answered_with_a_5xx_is_unknown_and_not_resent(gh: FakeGitHub) -> None:
+    client = gh.client()
+    gh.fail.append(httpx.Response(502, json={"message": "Bad Gateway"}))
+    with pytest.raises(GitHubWriteUnknown):
+        await client.send("POST", "issues/1/comments", {"body": "hi"})
+    assert gh.requests == ["POST /repos/acme/widgets/issues/1/comments"]
+    await client.aclose()
