@@ -28,7 +28,7 @@ The gateway publishes every state change on an internal bus and streams the same
 | `action.failed` | `Action` | It failed. Status `failed`, `error` set |
 | `rewind.planned` | `RewindJob` | A dry run finished. Status `planned` |
 | `rewind.started` | `RewindJob` | A run started. Status `running` |
-| `rewind.step` | `RewindStepData` (`{rewind_job_id, step, action}`) | One step finished. `action` has its new status: `reverted`, `conflict` or `revert_failed` |
+| `rewind.step` | `RewindStepData` (`{rewind_job_id, step, action}`) | One step finished. `action` has its new status: `reverted` (step `restored` or `compensated`), `conflict` or `revert_failed` |
 | `rewind.completed` | `RewindJob` | A run finished. Status `completed` or `partial` |
 | `rewind.failed` | `RewindJob` | A run stopped early. Status `failed`, `error` set |
 | `checksum.verified` | `ChecksumVerifiedData` (`{system, expected, actual, ok, rewind_job_id}`) | A system's checksum was compared after a rewind (or by the demo) |

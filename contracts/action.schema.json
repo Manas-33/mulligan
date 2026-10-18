@@ -56,7 +56,7 @@
     },
     "ActionStatus": {
       "type": "string",
-      "description": "Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).",
+      "description": "Lifecycle. Not held: pending -> executing -> executed | failed. Held: pending -> held -> approved -> executing -> executed | failed, or held -> rejected | expired. Rewind: executed -> reverting -> reverted | conflict | revert_failed. reverted covers both an undo and an offset (a refund or a correction email; the step's result says compensated). conflict means the rewind restored what it could and kept one or more fields a human changed after the agent (see RewindStep.kept_fields).",
       "enum": [
         "pending",
         "held",
@@ -130,7 +130,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "description": "<adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox, payments.cancel_authorization, none.",
+          "description": "<adapter>.<operation>: postgres.audit_log (undo reads the action's audit rows by id), postgres.undrop_table, github.reopen_issue, github.delete_comment, github.restore_file, notion.restore_page, email.cancel_outbox (not sent yet), email.send_correction (sent; offset with a correction email), payments.cancel_authorization (authorized, not captured), payments.refund (captured), none.",
           "examples": [
             "postgres.audit_log"
           ]
@@ -145,8 +145,10 @@
       "type": "string",
       "enum": [
         "imessage",
-        "dashboard"
-      ]
+        "dashboard",
+        "asi_one"
+      ],
+      "description": "Where the decision came from: an iMessage reply, the dashboard, or the Guardian agent's review card in ASI:One."
     },
     "ApprovalDecision": {
       "type": "string",
@@ -241,6 +243,7 @@
       "required": [
         "kind",
         "release_at",
+        "authorization_expires_at",
         "external_id"
       ],
       "properties": {
@@ -253,7 +256,15 @@
             "null"
           ],
           "format": "date-time",
-          "description": "payment_auth: when the authorization is captured (end of the undo window). email_outbox: null, it sends on approval."
+          "description": "payment_auth: when the authorization is captured (end of the undo window); always before authorization_expires_at. email_outbox: null, it sends on approval."
+        },
+        "authorization_expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "payment_auth: when the card authorization lapses (Stripe's capture_before; about 7 days for a customer-initiated Visa charge). release_at must come before it, or the capture fails and the money is never collected. null for email_outbox."
         },
         "external_id": {
           "type": [
@@ -556,11 +567,12 @@
     },
     "StepResult": {
       "type": "string",
-      "description": "pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. skipped: nothing to undo or nothing safe to do (read-only, an email already sent, a human reused a deleted row's key). failed: see detail.",
+      "description": "pending: not run yet (dry run, or still running). restored: everything put back. kept_human_edit: put back except kept_fields, which a human changed after the agent. compensated: the effect couldn't be undone, so it was offset instead (a captured payment refunded, a correction email sent). skipped: nothing to undo or nothing safe to do (read-only, an email already sent with no correction, a human reused a deleted row's key). failed: see detail.",
       "enum": [
         "pending",
         "restored",
         "kept_human_edit",
+        "compensated",
         "skipped",
         "failed"
       ]
@@ -575,7 +587,7 @@
     },
     "FieldChange": {
       "type": "object",
-      "description": "One field a rewind step looks at. Values are JSON; for a whole row or table they are the row object or null when absent.",
+      "description": "One field a rewind step looks at. before (the value before the agent's action, which the rewind restores), agent_value (what the agent wrote) and current (the value when the step was planned or run; it differs from agent_value if a human changed it) are each any JSON value: number, string, boolean, array, object, or null when absent. For a whole row or table they are the row object.",
       "additionalProperties": false,
       "required": [
         "field",
@@ -593,15 +605,9 @@
             "postgres:products/42/price"
           ]
         },
-        "before": {
-          "description": "Value before the agent's action. What the rewind restores."
-        },
-        "agent_value": {
-          "description": "What the agent wrote."
-        },
-        "current": {
-          "description": "Value when the step was planned or run. Differs from agent_value if a human changed it."
-        },
+        "before": {},
+        "agent_value": {},
+        "current": {},
         "outcome": {
           "$ref": "#/$defs/FieldChangeOutcome"
         }
@@ -1195,8 +1201,12 @@
         },
         "to": {
           "type": "string",
-          "pattern": "^\\+[1-9][0-9]{6,14}$",
-          "description": "E.164."
+          "pattern": "^(\\+[1-9][0-9]{6,14}|[^@\\s]+@[^@\\s]+\\.[^@\\s]+)$",
+          "description": "The approver's iMessage handle (APPROVER_HANDLE): an E.164 phone number or an Apple ID email.",
+          "examples": [
+            "+15555550123",
+            "approver@icloud.com"
+          ]
         }
       }
     },
@@ -1222,7 +1232,12 @@
         },
         "to": {
           "type": "string",
-          "pattern": "^\\+[1-9][0-9]{6,14}$"
+          "pattern": "^(\\+[1-9][0-9]{6,14}|[^@\\s]+@[^@\\s]+\\.[^@\\s]+)$",
+          "description": "The approver's iMessage handle (APPROVER_HANDLE): an E.164 phone number or an Apple ID email.",
+          "examples": [
+            "+15555550123",
+            "approver@icloud.com"
+          ]
         }
       }
     },
