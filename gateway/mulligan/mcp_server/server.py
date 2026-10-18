@@ -21,6 +21,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.tools.base import Tool
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import CallToolResult, TextContent, ToolAnnotations
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
@@ -28,7 +29,7 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mulligan.core import Gateway
-from mulligan.interfaces import ToolResult
+from mulligan.interfaces import ToolResult, UpstreamToolSchema
 from mulligan.models import Session
 from mulligan.settings import AgentToken, Settings
 
@@ -233,7 +234,41 @@ def build_mcp(settings: Settings, gateway: Gateway) -> tuple[MCPServer, AgentTok
     async def mulligan_status(ctx: Context) -> CallToolResult:
         return await run("mulligan_status", {}, ctx)
 
+    for schema in gateway.upstream.values():
+        add_passthrough(mcp, schema, run)
+
     return mcp, verifier
+
+
+class PassthroughTool(Tool):
+    """An upstream tool, listed with the upstream server's own input schema and forwarded as is.
+    The SDK's decorator derives schemas from Python signatures, which upstream tools lack."""
+
+    handler: Any = Field(default=None, exclude=True)
+
+    async def run(
+        self, arguments: dict[str, Any], context: Any, convert_result: bool = False
+    ) -> CallToolResult:
+        result: CallToolResult = await self.handler(arguments, context)
+        return result
+
+
+def add_passthrough(mcp: MCPServer, schema: UpstreamToolSchema, run: Any) -> None:
+    async def placeholder(ctx: Context) -> CallToolResult:  # pragma: no cover (never called)
+        raise NotImplementedError
+
+    async def handler(arguments: dict[str, Any], ctx: Context) -> CallToolResult:
+        result: CallToolResult = await run(schema.exposed_name, dict(arguments or {}), ctx)
+        return result
+
+    description = f"[via {schema.server}; held unless read-only] {schema.description or ''}"
+    base = Tool.from_function(
+        placeholder, name=schema.exposed_name, description=description.strip()
+    )
+    fields = {k: getattr(base, k) for k in Tool.model_fields}
+    fields["parameters"] = schema.input_schema or {"type": "object", "properties": {}}
+    tool = PassthroughTool.model_construct(**fields, handler=handler)
+    mcp._tool_manager._tools[schema.exposed_name] = tool
 
 
 # --- ASGI wrappers ----------------------------------------------------------------------------

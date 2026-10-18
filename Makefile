@@ -79,6 +79,10 @@ test-integration: ## Integration tests (needs `make db`)
 gateway: ## Run the gateway on the host (REST 127.0.0.1:8000, MCP 127.0.0.1:8001)
 	$(UV) run python -m mulligan
 
+.PHONY: mock-slack
+mock-slack: ## Mock Slack MCP server on 127.0.0.1:8200 (UPSTREAM_MCP_SERVERS=slack=http://127.0.0.1:8200/mcp)
+	$(UV) run python ../demo/upstream/slack_server.py
+
 .PHONY: ci
 ci: types-check lint-contracts lint typecheck test photon-check dashboard-check ## Everything CI runs
 

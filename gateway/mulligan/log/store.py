@@ -15,6 +15,21 @@ def _doc(model: Action | Session | RewindJob) -> Jsonb:
     return Jsonb(model.model_dump(mode="json"))
 
 
+class HoldWindowError(ValueError):
+    """A payment hold would be captured after its card authorization lapses."""
+
+
+def check_hold_window(action: Action) -> None:
+    hold = action.hold
+    if hold and hold.release_at and hold.authorization_expires_at:
+        if hold.release_at >= hold.authorization_expires_at:
+            raise HoldWindowError(
+                f"{action.id}: hold.release_at {hold.release_at.isoformat()} is not before "
+                f"authorization_expires_at {hold.authorization_expires_at.isoformat()}, so the "
+                "capture would fail and the charge would never be collected"
+            )
+
+
 class LogStore:
     """Implements `interfaces.ActionStore` plus what the core and the REST API need."""
 
@@ -74,6 +89,7 @@ class LogStore:
     # --- actions ----------------------------------------------------------------------------
 
     async def save(self, action: Action) -> None:
+        check_hold_window(action)
         async with self.pool.connection() as conn:
             await conn.execute(
                 """

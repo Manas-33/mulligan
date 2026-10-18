@@ -77,6 +77,7 @@ class Settings:
     api_port: int = 8000
     mcp_port: int = 8001
     mcp_public_url: str = ""
+    upstream_mcp_servers: str = ""
     dashboard_token: str = ""
     service_token: str = ""
     agent_tokens: Mapping[str, AgentToken] = field(default_factory=dict)
@@ -108,6 +109,7 @@ class Settings:
             api_port=int(get("MULLIGAN_API_PORT", "8000")),
             mcp_port=int(get("MULLIGAN_MCP_PORT", "8001")),
             mcp_public_url=get("MULLIGAN_MCP_PUBLIC_URL"),
+            upstream_mcp_servers=get("UPSTREAM_MCP_SERVERS"),
             dashboard_token=get("MULLIGAN_DASHBOARD_TOKEN"),
             service_token=get("MULLIGAN_SERVICE_TOKEN"),
             agent_tokens=parse_agent_tokens(get("MULLIGAN_AGENT_TOKENS")),
