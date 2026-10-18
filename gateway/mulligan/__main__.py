@@ -10,6 +10,7 @@ import logging
 import sentry_sdk
 import uvicorn
 
+from mulligan.adapters.notion.adapter import NotionAdapter
 from mulligan.adapters.postgres.adapter import PostgresAdapter
 from mulligan.app import create_app
 from mulligan.interfaces import Adapter
@@ -25,7 +26,12 @@ async def serve(settings: Settings) -> None:
     postgres = await PostgresAdapter.open(settings) if settings.prod_db_url else None
     if postgres:
         adapters.append(postgres)
+    notion = await NotionAdapter.open(settings) if settings.notion_token else None
+    if notion:
+        adapters.append(notion)
     services = await build_services(settings, adapters)
+    if notion and settings.demo:
+        services.demo_resets.append(notion.reset)
     services.start_background()
     rest = create_app(settings, services=services)
     mcp = create_mcp_app(settings, services.gateway)
@@ -46,6 +52,8 @@ async def serve(settings: Settings) -> None:
         await services.close()
         if postgres:
             await postgres.close()
+        if notion:
+            await notion.close()
 
 
 def main() -> None:
