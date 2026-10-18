@@ -124,6 +124,10 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 .hero { display: grid; grid-template-columns: minmax(0, 700px) minmax(0, 1fr); align-items: center; gap: 24px; padding: 64px 24px 56px; }
 .hero-text { display: flex; flex-direction: column; gap: 24px; }
 .hero-actions { display: flex; align-items: center; gap: 22px; padding-top: 6px; }
+/* Reads changed nothing, so the headline says them quietly and lets the shots carry it. */
+.headline .reads { font-size: 0.57em; font-weight: 700; letter-spacing: -0.02em; color: var(--quiet); }
+.rewound { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; font-size: 17px; font-weight: 500; }
+.rewound .sticker { font-size: 19px; padding: 8px 16px 10px; border-radius: 12px; letter-spacing: -0.01em; transform: rotate(-2deg); }
 .pile { --pile-scale: 1; position: relative; height: 380px; }
 .pile-item { position: absolute; display: flex; flex-direction: column; align-items: center; animation: float 6s ease-in-out infinite alternate; }
 .pile-item .sticker-small { position: absolute; top: -6px; left: 50%; transform: translateX(-30%) rotate(-5deg); }
@@ -148,7 +152,7 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 
 .lanes-wrap { position: relative; }
 .lane { display: flex; align-items: center; height: 64px; border-bottom: 1px solid var(--rule); }
-.lane-name { display: flex; align-items: center; gap: 12px; width: 160px; flex-shrink: 0; }
+.lane-name { display: flex; align-items: center; gap: 12px; width: 196px; flex-shrink: 0; }
 .lane-name div { display: flex; flex-direction: column; line-height: 1.25; }
 .lane-name strong { font-weight: 600; font-size: 16px; }
 .lane-name .mono { font-size: 12px; }
@@ -169,6 +173,9 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 .bead.status-held { background: none; width: 22px; height: 30px; translate: -20% -60%; }
 .bead.status-reverted, .bead.status-rejected, .bead.status-expired { opacity: 0.3; }
 .bead.status-failed, .bead.status-revert_failed { background: var(--berry); }
+/* A read is a small faded dot: it looked at the green and changed nothing. */
+.bead.is-read { width: 8px; height: 8px; border-radius: 50%; opacity: 0.4; }
+.bead.is-read.is-selected { opacity: 1; background: color-mix(in srgb, var(--c) 45%, var(--card)); }
 .playhead { position: absolute; top: -6px; bottom: 0; right: 14px; width: 2px; background: var(--cream); border-radius: 2px; }
 .playhead span { position: absolute; bottom: -10px; left: 50%; translate: -50% 0; padding: 0 6px; background: var(--cream); color: var(--ground); border-radius: 4px; font-size: 11px; font-weight: 700; }
 

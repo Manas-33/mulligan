@@ -22,7 +22,7 @@ export function planCounts(job: RewindJob, actions: Record<string, Action>): Pla
   return counts;
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The one-sentence summary at the top of the plan. */
 export function planSentence(c: PlanCounts): string {
@@ -75,15 +75,34 @@ export function countBySystem(actions: Action[]): Partial<Record<System, number>
   return out;
 }
 
-/** What a lane says under its name: "15 writes", "40 closed", "1 held". */
+/** A read changed nothing, so a rewind has nothing to undo for it. */
+export const isRead = (a: Action) => a.reversibility.label === "read_only";
+
+/** What a lane says under its name: "15 writes · 6 reads", "40 changes", "1 held". */
 export function laneCaption(system: System, actions: Action[]): string {
-  const held = actions.filter((a) => a.status === "held").length;
-  const done = actions.length - held;
+  const reads = actions.filter(isRead).length;
+  const held = actions.filter((a) => !isRead(a) && a.status === "held").length;
+  const done = actions.length - reads - held;
   const verb: Partial<Record<System, string>> = { postgres: "write", github: "change", notion: "page", email: "email", payments: "charge" };
   const parts = [];
   if (done) parts.push(plural(done, verb[system] ?? "call"));
+  if (reads) parts.push(plural(reads, "read"));
   if (held) parts.push(`${held} held`);
   return parts.join(" · ");
+}
+
+/**
+ * Reads and shots in a round. A shot is anything that isn't a read, held ones included. `left` is
+ * the shots a rewind can still do something about; `rewound` the ones it already took back.
+ */
+export function shotCounts(actions: Action[]): { reads: number; shots: number; left: number; rewound: number } {
+  const shots = actions.filter((a) => !isRead(a));
+  return {
+    reads: actions.length - shots.length,
+    shots: shots.length,
+    left: shots.filter(undoable).length,
+    rewound: shots.filter((a) => a.status === "reverted" || a.status === "conflict").length,
+  };
 }
 
 /** 0..1 position of `at` between `start` and `end`; a zero-length span puts everything at the end. */
@@ -147,9 +166,12 @@ export const shortId = (id: string) => id.replace(/^[a-z]+_/, "").slice(-4).toLo
 /** Statuses a rewind can still do something about (undo it, or refuse it while held). */
 export const UNDOABLE = new Set<Action["status"]>(["executed", "held", "approved", "conflict"]);
 
+/** Whether a rewind can still do something about this action. Reads never need one. */
+export const undoable = (a: Action) => !isRead(a) && UNDOABLE.has(a.status);
+
 /** Undoable actions created at or after `since`: what "Rewind to here" would take back. */
 export const undoableFrom = (actions: Action[], since: string): Action[] =>
-  actions.filter((a) => UNDOABLE.has(a.status) && Date.parse(a.created_at) >= Date.parse(since));
+  actions.filter((a) => undoable(a) && Date.parse(a.created_at) >= Date.parse(since));
 
 /** Why a gateway call failed, sorted into what the screens can say something useful about. */
 export type Problem = { kind: "unauthorized" | "unreachable" | "gateway"; status?: number; detail: string };

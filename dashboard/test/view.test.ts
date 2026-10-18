@@ -9,6 +9,7 @@ import {
   planSentence,
   position,
   rewindSummary,
+  shotCounts,
   showValue,
   stepKind,
   timeLeft,
@@ -37,6 +38,8 @@ const action = (over: Partial<Action>) =>
     reversibility: { label: "reversible", source: "policy", reason: null },
     ...over,
   }) as Action;
+
+const read = (over: Partial<Action>) => action({ reversibility: { label: "read_only", source: "policy", reason: null }, ...over });
 
 const job = (steps: RewindStep[], verification: RewindJob["verification"] = {}) =>
   ({ id: "rwd_1", status: "completed", steps, verification }) as unknown as RewindJob;
@@ -114,6 +117,10 @@ describe("formatting", () => {
     expect(laneCaption("postgres", [action({}), action({}), action({ status: "held" })])).toBe("2 writes · 1 held");
     expect(laneCaption("email", [action({ status: "held" })])).toBe("1 held");
   });
+  it("counts reads apart from the writes", () => {
+    expect(laneCaption("postgres", [action({}), read({}), read({}), action({ status: "held" })])).toBe("1 write · 2 reads · 1 held");
+    expect(laneCaption("mulligan", [read({})])).toBe("1 read");
+  });
 });
 
 describe("undoableFrom", () => {
@@ -127,6 +134,28 @@ describe("undoableFrom", () => {
     ];
     expect(undoableFrom(list, "2026-10-17T23:04:14Z").map((a) => a.id)).toEqual(["a4", "a2"]);
     expect(undoableFrom(list, "2026-10-17T23:05:00Z")).toEqual([]);
+  });
+});
+
+describe("undoableFrom and reads", () => {
+  it("never takes back a read: it changed nothing", () => {
+    const list = [read({ id: "r1", created_at: "2026-10-17T23:04:20Z" }), action({ id: "a1", created_at: "2026-10-17T23:04:10Z" })];
+    expect(undoableFrom(list, "2026-10-17T23:04:00Z").map((a) => a.id)).toEqual(["a1"]);
+    expect(undoableFrom(list, "2026-10-17T23:04:15Z")).toEqual([]);
+  });
+});
+
+describe("shotCounts", () => {
+  it("splits reads from shots, counting held ones as shots", () => {
+    const list = [read({}), read({}), read({}), action({}), action({ status: "held" })];
+    expect(shotCounts(list)).toEqual({ reads: 3, shots: 2, left: 2, rewound: 0 });
+  });
+  it("counts what a rewind took back and leaves the reads alone", () => {
+    const list = [read({}), action({ status: "reverted" }), action({ status: "conflict" }), action({ status: "rejected" })];
+    expect(shotCounts(list)).toEqual({ reads: 1, shots: 3, left: 1, rewound: 2 });
+  });
+  it("handles a round of only reads", () => {
+    expect(shotCounts([read({}), read({})])).toEqual({ reads: 2, shots: 0, left: 0, rewound: 0 });
   });
 });
 

@@ -1,7 +1,8 @@
-// The top of a round: what the agent did, in one line, and the pile of things it touched.
+// The top of a round: what the agent did, in one line, and the pile of things it touched. Reads
+// ("reading the green") stay quiet; shots, the actions that changed something, carry the numbers.
 
 import type { Action, Session, System } from "../types.ts";
-import { countBySystem, duration, laneCaption, shortId, SYSTEM_ORDER } from "../view.ts";
+import { countBySystem, duration, laneCaption, plural, shortId, shotCounts, SYSTEM_ORDER } from "../view.ts";
 import { RewindGlyph, SystemObject } from "./SystemObject.tsx";
 
 // Where each object sits in the pile (percent of the pile box) and how it leans.
@@ -20,6 +21,7 @@ export function Hero(props: { session: Session; actions: Action[]; onRewind: () 
   const systems = SYSTEM_ORDER.filter((s) => counts[s]);
   const end = session.ended_at ?? actions[0]?.created_at ?? session.started_at;
   const rewound = session.status === "rewound";
+  const { reads, shots, left, rewound: back } = shotCounts(actions);
 
   return (
     <section className="hero" aria-labelledby="hero-title">
@@ -33,20 +35,35 @@ export function Hero(props: { session: Session; actions: Action[]; onRewind: () 
             <span className="line">Nothing on the card yet.</span>
           ) : (
             <>
+              {reads > 0 && <span className="line reads">The agent read the green {reads === 1 ? "once" : `${reads} times`}</span>}
               <span className="line">
-                The agent took {actions.length} {actions.length === 1 ? "shot" : "shots"}.
+                {reads > 0 ? "and took" : "The agent took"} {shots === 0 ? "no shots" : plural(shots, "shot")}.
               </span>
               <span className="line">
-                {rewound ? "You took the" : "Take a"} <span className="sticker sticker-sun">mulligan.</span>
+                {shots === 0 ? (
+                  "Nothing to take back."
+                ) : (
+                  <>
+                    {rewound ? "You took the" : "Take a"} <span className="sticker sticker-sun">mulligan.</span>
+                  </>
+                )}
               </span>
             </>
           )}
         </h1>
         <div className="hero-actions">
-          <button className="pill-button" onClick={onRewind} disabled={!canRewind}>
-            <RewindGlyph /> Rewind the round
-          </button>
-          {!canRewind && actions.length > 0 && <span className="quiet">Nothing left to undo here.</span>}
+          {shots > 0 && (left > 0 || back === 0) && (
+            <button className="pill-button" onClick={onRewind} disabled={!canRewind}>
+              <RewindGlyph /> {left > 0 ? `Rewind ${plural(left, "shot")}` : "Rewind the round"}
+            </button>
+          )}
+          {back > 0 && (
+            <p className="rewound">
+              <span className="sticker sticker-mint">{plural(back, "shot")} rewound</span>
+              {reads > 0 && <span className="quiet">· {plural(reads, "read")} left as they were</span>}
+            </p>
+          )}
+          {!canRewind && back === 0 && shots > 0 && <span className="quiet">Nothing left to undo here.</span>}
         </div>
       </div>
       <div className="pile" aria-hidden>

@@ -1,10 +1,10 @@
 // "The round so far": one lane per system, a bead per action placed by time, held actions as red
-// flags, and the selected action described underneath.
+// flags, reads as small faded dots, and the selected action described underneath.
 
 import { useState } from "react";
 import { SENTRY_TRACE_URL } from "../config.ts";
 import type { Action, Session, System } from "../types.ts";
-import { laneCaption, position, shortId, SYSTEM_ORDER, systemName, undoableFrom } from "../view.ts";
+import { isRead, laneCaption, position, shortId, SYSTEM_ORDER, systemName, undoableFrom } from "../view.ts";
 import { DitherField } from "./Dither.tsx";
 import { Flag, RewindGlyph, SystemObject } from "./SystemObject.tsx";
 
@@ -17,7 +17,8 @@ export function Course({ session, actions, onRewindTo }: CourseProps) {
   const start = session.started_at;
   const end = session.ended_at ?? actions[0]?.created_at ?? start;
   const systems = SYSTEM_ORDER.filter((s) => actions.some((a) => a.system === s));
-  const selected = actions.find((a) => a.id === picked) ?? actions.find((a) => a.status !== "held") ?? actions[0];
+  const selected =
+    actions.find((a) => a.id === picked) ?? actions.find((a) => a.status !== "held" && !isRead(a)) ?? actions.find((a) => a.status !== "held") ?? actions[0];
 
   return (
     <section className="course card" aria-labelledby="course-title">
@@ -73,13 +74,14 @@ function Lane(props: { system: System; actions: Action[]; start: string; end: st
       <div className="lane-track">
         {actions.map((a) => {
           const held = a.status === "held";
+          const read = isRead(a);
           return (
             <button
               key={a.id}
               type="button"
-              className={`bead bead-${system} status-${a.status} ${a.id === selectedId ? "is-selected" : ""}`}
+              className={`bead bead-${system} status-${a.status} ${read ? "is-read" : ""} ${a.id === selectedId ? "is-selected" : ""}`}
               style={{ left: `${position(a.created_at, start, end) * 100}%` }}
-              aria-label={`${a.summary ?? a.tool}, ${a.status}`}
+              aria-label={`${a.summary ?? a.tool}, ${read ? "read" : a.status}`}
               aria-pressed={a.id === selectedId}
               onClick={() => onPick(a.id)}
             >
@@ -94,7 +96,8 @@ function Lane(props: { system: System; actions: Action[]; start: string; end: st
 
 function Selected({ action, undoes, onRewindTo }: { action: Action; undoes: number; onRewindTo: () => void }) {
   const time = new Date(action.created_at).toLocaleTimeString([], { hour12: false });
-  const why = action.explanation ?? action.reversibility.reason;
+  const read = isRead(action);
+  const why = read ? "Just reading the green. Nothing changed, so there’s nothing to rewind." : (action.explanation ?? action.reversibility.reason);
   return (
     <div className="selected" aria-live="polite">
       <SystemObject system={action.system} size={52} />
@@ -115,14 +118,16 @@ function Selected({ action, undoes, onRewindTo }: { action: Action; undoes: numb
         )}
         {action.error && <p className="error">{action.error}</p>}
       </div>
-      <div className="rewind-to">
-        <button className="pill-button small" disabled={undoes === 0} onClick={onRewindTo}>
-          <RewindGlyph size={16} /> Rewind to here
-        </button>
-        <span className="quiet small">
-          {undoes === 0 ? "Nothing to undo from here." : undoes === 1 ? "Undoes just this one." : `Undoes this and the ${undoes - 1} after it.`}
-        </span>
-      </div>
+      {!read && (
+        <div className="rewind-to">
+          <button className="pill-button small" disabled={undoes === 0} onClick={onRewindTo}>
+            <RewindGlyph size={16} /> Rewind to here
+          </button>
+          <span className="quiet small">
+            {undoes === 0 ? "Nothing to undo from here." : undoes === 1 ? "Undoes just this one." : `Undoes this and the ${undoes - 1} after it.`}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
