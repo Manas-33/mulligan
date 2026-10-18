@@ -85,6 +85,8 @@ class Settings:
     mulligan_db_url: str = ""
     prod_db_url: str = ""
     prod_db_readonly_url: str = ""
+    prod_db_admin_url: str = ""
+    seed_dir: Path = REPO_ROOT / "demo" / "seed"
     pg_query_timeout_ms: int = 5000
     pg_query_max_rows: int = 1000
     pg_allowed_schemas: tuple[str, ...] = ("public",)
@@ -117,6 +119,8 @@ class Settings:
             mulligan_db_url=get("MULLIGAN_DB_URL"),
             prod_db_url=get("PROD_DB_URL"),
             prod_db_readonly_url=get("PROD_DB_READONLY_URL"),
+            prod_db_admin_url=get("PROD_DB_ADMIN_URL"),
+            seed_dir=Path(get("MULLIGAN_SEED_DIR", str(cls.seed_dir))),
             pg_query_timeout_ms=int(get("PG_QUERY_TIMEOUT_MS", "5000")),
             pg_query_max_rows=int(get("PG_QUERY_MAX_ROWS", "1000")),
             pg_allowed_schemas=csv("PG_ALLOWED_SCHEMAS", "public"),

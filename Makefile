@@ -11,6 +11,8 @@ REDOCLY := $(NPX) @redocly/cli@2.64.1
 SCHEMA := contracts/action.schema.json
 PY_MODELS := gateway/mulligan/models.py
 TS_TYPES := contracts/generated/types.ts
+RECORDING ?= demo/recordings/scripted.json
+SPEED ?= 1
 
 .PHONY: help
 help: ## List targets
@@ -107,6 +109,22 @@ nuke: ## Stop the stack and delete both databases' volumes
 .PHONY: logs
 logs: ## Follow the stack's logs
 	docker compose --profile app logs -f --tail=100
+
+.PHONY: demo-reset
+demo-reset: ## Reseed every system, clear the log, print checksums (gateway running, MULLIGAN_DEMO=1)
+	$(UV) run python ../demo/scripts/reset.py
+
+.PHONY: demo-replay
+demo-replay: ## Replay the default recording through Mulligan (RECORDING=..., SPEED=...)
+	$(UV) run python ../demo/rogue_agent.py --replay $(abspath $(RECORDING)) --speed $(SPEED)
+
+.PHONY: demo-live
+demo-live: ## Run the rogue agent live with an LLM and record it
+	$(UV) run python ../demo/rogue_agent.py --live
+
+.PHONY: teammate-edit
+teammate-edit: ## A teammate's direct edits after the agent ran (kept and flagged by the rewind)
+	$(UV) run python ../demo/teammate_edit.py
 
 .PHONY: tunnel
 tunnel: ## Public HTTPS URL for the MCP port only (cloudflared quick tunnel, for Devin)

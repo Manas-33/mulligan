@@ -145,6 +145,15 @@ class Adapter(ABC):
         """
         return pre
 
+    async def verify_scope(
+        self, actions: list[Action], steps: list[RewindStep]
+    ) -> tuple[str, str] | None:
+        """``(expected, actual)`` checksums over only what ``actions`` touched, after a rewind of
+        them. Lets verification ignore edits people made elsewhere in the system. ``None`` (the
+        default) means "compare the whole system": ``expected_checksum`` vs ``checksum``.
+        """
+        return None
+
 
 class Policy(ABC):
     """The reversibility policy for built-in tools (``contracts/reversibility_policy.yaml``)."""
