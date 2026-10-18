@@ -26,6 +26,7 @@ dev = [
     "datamodel-code-generator==0.85.0",
     "jsonschema==4.26.0",
     "types-pyyaml==6.0.12.20260906",
+    "anthropic==1.15.0",
 ]
 
 [build-system]
