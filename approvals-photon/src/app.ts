@@ -1,11 +1,14 @@
 // HTTP surface of the Photon service (contracts/photon.openapi.yaml), called by the gateway.
-// Phase 1 skeleton: health and auth are real; the /notify/* routes answer 501 until Phase 2.
 
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { notifyApproval, notifySummary, type Reply } from "./notify.ts";
+import type { Messenger } from "./photon.ts";
 import type { ErrorResponse } from "./types.ts";
 
-export type AppOptions = { serviceToken: string };
+export type AppOptions = { serviceToken: string; messenger: Messenger; log?: (line: string) => void };
+
+const MAX_BODY = 16 * 1024;
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -23,21 +26,59 @@ export function tokenMatches(given: string | string[] | undefined, expected: str
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function createApp({ serviceToken }: AppOptions): Server {
-  return createServer((req: IncomingMessage, res: ServerResponse) => {
+class BodyError extends Error {
+  constructor(
+    readonly status: number,
+    detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > MAX_BODY) throw new BodyError(413, "body too large");
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new BodyError(422, "body must be JSON");
+  }
+}
+
+const ROUTES: Record<string, (m: Messenger, body: unknown) => Promise<Reply>> = {
+  "/notify/approval": notifyApproval,
+  "/notify/summary": notifySummary,
+};
+
+export function createApp({ serviceToken, messenger, log = console.error }: AppOptions): Server {
+  return createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
 
     if (req.method === "GET" && path === "/healthz") return send(res, 200, { ok: true });
 
     if (!tokenMatches(req.headers["x-mulligan-service-token"], serviceToken)) {
+      req.resume();
       return error(res, 401, "missing or invalid token");
     }
 
-    if (req.method === "POST" && (path === "/notify/approval" || path === "/notify/summary")) {
-      req.resume(); // drain the body; Phase 2 parses and validates it
-      return error(res, 501, "not implemented yet");
+    const route = req.method === "POST" ? ROUTES[path] : undefined;
+    if (!route) {
+      req.resume();
+      return error(res, 404, "not found");
     }
 
-    return error(res, 404, "not found");
+    try {
+      const reply = await route(messenger, await readJson(req));
+      return send(res, reply.status, reply.body);
+    } catch (e) {
+      if (e instanceof BodyError) return error(res, e.status, e.message);
+      log(`${path} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return error(res, 502, "Photon request failed");
+    }
   });
 }
