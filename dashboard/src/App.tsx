@@ -4,8 +4,9 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { ApiError, createClient } from "./api/client.ts";
 import { streamEvents } from "./api/sse.ts";
-import { API_URL, DASHBOARD_TOKEN } from "./config.ts";
-import { empty, heldActions, reduce, sessionList, timeline } from "./state.ts";
+import { RewindDialog } from "./components/RewindDialog.tsx";
+import { API_URL, DASHBOARD_TOKEN, SENTRY_TRACE_URL } from "./config.ts";
+import { empty, heldActions, latestRewind, reduce, sessionList, timeline } from "./state.ts";
 import type { Action, ApprovalDecision, Session } from "./types.ts";
 
 const client = createClient({ baseUrl: API_URL, token: DASHBOARD_TOKEN });
@@ -17,6 +18,7 @@ export function App() {
   const [conn, setConn] = useState<Conn>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [rewinding, setRewinding] = useState(false);
 
   useEffect(() => {
     const stop = new AbortController();
@@ -40,6 +42,8 @@ export function App() {
   const current = selected ?? sessions[0]?.id ?? null;
   const actions = useMemo(() => (current ? timeline(state, current) : []), [state, current]);
   const held = useMemo(() => heldActions(state), [state]);
+  const session = current ? state.sessions[current] : undefined;
+  const undoable = actions.some((a) => ["executed", "held", "approved", "conflict"].includes(a.status));
 
   return (
     <div className="app">
@@ -64,6 +68,25 @@ export function App() {
           ))}
         </nav>
         <main className="timeline">
+          {held.length > 0 && (
+            <section className="held-panel" aria-label="Waiting for approval">
+              <h2>Waiting for approval</h2>
+              <ol>
+                {held.map((a) => (
+                  <ActionRow key={a.id} action={a} />
+                ))}
+              </ol>
+            </section>
+          )}
+          {session && (
+            <div className="timeline-head">
+              <h2>{session.agent.display_name}</h2>
+              <span className="muted">{session.status}</span>
+              <button className="danger" disabled={!undoable} onClick={() => setRewinding(true)}>
+                Rewind session
+              </button>
+            </div>
+          )}
           {actions.length === 0 ? (
             <p className="muted">No actions in this session yet.</p>
           ) : (
@@ -75,6 +98,15 @@ export function App() {
           )}
         </main>
       </div>
+      {rewinding && session && (
+        <RewindDialog
+          client={client}
+          session={session}
+          live={latestRewind(state, session.id)}
+          onJob={(job) => dispatch({ type: "rewind", job })}
+          onClose={() => setRewinding(false)}
+        />
+      )}
     </div>
   );
 }
@@ -137,10 +169,32 @@ export function ActionRow({ action }: { action: Action }) {
             </button>
           </div>
         )}
+        {action.hold?.kind === "payment_auth" && action.hold.release_at && action.status === "executed" && (
+          <PaymentHold releaseAt={action.hold.release_at} />
+        )}
         {action.error && <p className="error">{action.error}</p>}
         {err && <p className="error">{err}</p>}
       </div>
-      <time className="muted">{new Date(action.created_at).toLocaleTimeString()}</time>
+      <div className="action-meta">
+        <time className="muted">{new Date(action.created_at).toLocaleTimeString()}</time>
+        {action.sentry_trace_id && (
+          <a className="muted" href={SENTRY_TRACE_URL + action.sentry_trace_id} target="_blank" rel="noreferrer">
+            trace
+          </a>
+        )}
+      </div>
     </li>
+  );
+}
+
+function PaymentHold({ releaseAt }: { releaseAt: string }) {
+  const at = new Date(releaseAt);
+  const captured = at.getTime() <= Date.now();
+  return (
+    <p className="muted">
+      {captured ? "Captured at " : "Authorized only. Captures at "}
+      {at.toLocaleTimeString()}
+      {captured ? " (a rewind now refunds it)." : " unless rewound first."}
+    </p>
   );
 }

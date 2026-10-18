@@ -39,3 +39,13 @@ describe("decide", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ decision: "reject", code: "4821", channel: "dashboard", decided_by: "dashboard" });
   });
 });
+
+describe("rewind", () => {
+  it("posts the scope with dry_run", async () => {
+    const f = fakeFetch(200, { id: "rwd_1" });
+    await createClient({ baseUrl: "http://x", token: "t", fetch: f }).rewind({ session_id: "ses_1" }, true);
+    const [url, init] = f.mock.calls[0]!;
+    expect(String(url)).toBe("http://x/api/rewind");
+    expect(JSON.parse(String(init?.body))).toEqual({ scope: { session_id: "ses_1" }, dry_run: true, requested_by: "dashboard" });
+  });
+});

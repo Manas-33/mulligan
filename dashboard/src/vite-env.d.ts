@@ -6,4 +6,5 @@ interface ImportMetaEnv {
   readonly MULLIGAN_DASHBOARD_TOKEN?: string;
   readonly SENTRY_DSN_DASHBOARD?: string;
   readonly SENTRY_ENVIRONMENT?: string;
+  readonly VITE_SENTRY_TRACE_URL?: string;
 }
