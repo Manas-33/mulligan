@@ -324,7 +324,7 @@ def build_mcp(settings: Settings, gateway: Gateway) -> tuple[MCPServer, AgentTok
         customer_id: str,
         amount_cents: int = Field(ge=1, le=100_000),
         description: str = Field(min_length=1),
-        currency: str = "usd",
+        currency: Literal["usd", "eur", "gbp", "cad", "aud"] = "usd",
     ) -> CallToolResult:
         args = {
             "customer_id": customer_id,
