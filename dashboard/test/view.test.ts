@@ -147,6 +147,20 @@ describe("undoableFrom", () => {
     expect(isUndoable(action({ id: "w", status: "executed" }))).toBe(true);
     expect(undoableFrom([read, kept], "2000-01-01T00:00:00Z")).toEqual([]);
   });
+
+  it("matches the gateway: a failed undo step is tried again", () => {
+    expect(isUndoable(action({ status: "revert_failed" }))).toBe(true);
+  });
+
+  it("matches the gateway: a failed call counts only if its change may have landed", () => {
+    const inverse = { kind: "github.delete_comment", payload: {} };
+    expect(isUndoable(action({ status: "failed", executed_at: null, inverse: null }))).toBe(false);
+    expect(isUndoable(action({ status: "failed", executed_at: null, inverse }))).toBe(true);
+    // Rewound since (reverting -> reverted): done, like any other reverted action.
+    expect(isUndoable(action({ status: "reverted", executed_at: null, inverse }))).toBe(false);
+    // Its undo step failed: tried again.
+    expect(isUndoable(action({ status: "revert_failed", executed_at: null, inverse }))).toBe(true);
+  });
 });
 
 describe("undoableFrom and reads", () => {
