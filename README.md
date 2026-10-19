@@ -57,6 +57,8 @@ Agents connect to Mulligan as an **MCP server**. Mulligan holds the real credent
 
 ## See it
 
+**The launch video.** Mulligan in 45 seconds: [docs/assets/mulligan-launch-45s.mp4](docs/assets/mulligan-launch-45s.mp4).
+
 **The rewind.** A cleanup agent deleted 30 customers (cascading into 90 orders, 120 order items and 10 support tickets), zeroed the Widget prices, dropped a pricing table, closed GitHub issues, rewrote the Notion pricing doc, and tried to email customers and charge a card. One click puts it all back:
 
 <p align="center"><img src="docs/assets/rewind.gif" alt="The rewind: a dry-run plan, the live rewind newest first, then every system's checksum matching" width="880"></p>
