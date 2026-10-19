@@ -214,6 +214,22 @@ code.mono { font-size: 0.9em; color: var(--cream); }
 .plan-side { display: flex; flex-direction: column; gap: 8px; width: 200px; flex-shrink: 0; }
 .plan-side h2 { font-weight: 800; font-size: 24px; letter-spacing: -0.02em; }
 .plan-rows { flex: 1; min-width: 0; }
+/* Collapsed sections: a mono chip like the stickers, and one line per step. */
+.chip-toggle {
+  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; margin-top: 6px; cursor: pointer;
+  padding: 5px 12px 4px; border: 1.5px solid var(--cream-edge); border-radius: 999px; background: transparent;
+  color: var(--cream); font: 700 12px var(--mono); letter-spacing: 0.02em;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.chip-toggle:hover { background: var(--cream); color: var(--ground); transform: rotate(-2deg); }
+.chip-toggle .chevron { transition: transform 160ms var(--bounce); }
+.plan-section.is-open .chip-toggle .chevron { transform: rotate(180deg); }
+.plan-preview { display: flex; flex-direction: column; cursor: pointer; }
+.plan-preview li { display: flex; align-items: baseline; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 16px; color: var(--body); overflow-wrap: anywhere; }
+.plan-preview li:last-child { border-bottom: 0; }
+.plan-preview:hover li { color: var(--cream); }
+.preview-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); translate: 0 -2px; }
+.plan-preview .preview-more { padding-left: 19px; font: 700 13px var(--mono); color: var(--quiet); }
 .row { display: grid; grid-template-columns: 280px 330px minmax(0, 1fr); align-items: center; gap: 0 16px; min-height: 54px; padding: 8px 0; border-bottom: 1px solid var(--rule); }
 .row:last-child { border-bottom: 0; }
 .row-field { display: flex; flex-direction: column; gap: 2px; font-size: 15px; color: var(--body); }
