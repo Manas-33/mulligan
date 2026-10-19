@@ -175,14 +175,20 @@ function Plan(props: {
       <p className="lede">{planSentence(counts)}</p>
 
       {bySystem.map(({ system, steps }) => (
-        <PlanSection key={system} system={system} title={systemName(system)} count={steps.length}>
+        <PlanSection
+          key={system}
+          system={system}
+          title={systemName(system)}
+          count={steps.length}
+          preview={steps.map((s) => actions[s.action_id]?.summary ?? s.tool)}
+        >
           {steps.map((s) => (
             <StepRows key={s.action_id} step={s} action={actions[s.action_id]} />
           ))}
         </PlanSection>
       ))}
       {held.length > 0 && (
-        <PlanSection system="mulligan" title="Waiting for approval" count={held.length} caption="never ran, gets refused">
+        <PlanSection system="mulligan" title="Waiting for approval" count={held.length} caption="never ran, gets refused" defaultOpen>
           {held.map((s) => {
             const a = actions[s.action_id];
             return (
@@ -211,16 +217,53 @@ function Plan(props: {
   );
 }
 
-function PlanSection(props: { system: System; title: string; count: number; caption?: string; children: React.ReactNode }) {
-  const { system, title, count, caption, children } = props;
+const PREVIEW_LINES = 3;
+
+/**
+ * One system's part of the preview. Collapsed, it shows one line per step so the "Undo it all"
+ * button stays in reach; open, it shows every field that goes back.
+ */
+function PlanSection(props: {
+  system: System;
+  title: string;
+  count: number;
+  caption?: string;
+  preview?: string[];
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const { system, title, count, caption, preview = [], defaultOpen = false, children } = props;
+  const [open, setOpen] = useState(defaultOpen);
+  const steps = `${count} ${count === 1 ? "step" : "steps"}`;
+  const more = preview.length - PREVIEW_LINES;
   return (
-    <div className="plan-section">
+    <div className={`plan-section ${open ? "is-open" : ""}`}>
       <div className="plan-side">
         <SystemObject system={system} size={78} />
         <h2>{title}</h2>
-        <span className="quiet small">{caption ?? `${count} ${count === 1 ? "step" : "steps"}`}</span>
+        <span className="quiet small">{caption ?? steps}</span>
+        <button className="chip-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          {open ? "hide details" : "show details"}
+          <svg className="chevron" width={12} height={12} viewBox="0 0 12 12" aria-hidden>
+            <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          </svg>
+        </button>
       </div>
-      <div className="plan-rows">{children}</div>
+      <div className="plan-rows">
+        {open || preview.length === 0 ? (
+          children
+        ) : (
+          <ol className="plan-preview" onClick={() => setOpen(true)}>
+            {preview.slice(0, PREVIEW_LINES).map((line, i) => (
+              <li key={i}>
+                <span className="preview-dot" aria-hidden />
+                {line}
+              </li>
+            ))}
+            {more > 0 && <li className="preview-more">+ {more} more</li>}
+          </ol>
+        )}
+      </div>
     </div>
   );
 }
